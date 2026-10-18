@@ -27,6 +27,11 @@ type UpdateState =
 /** Ivy goes online here only when the button is pressed (update.rs). */
 const UpdatesControl: React.FC = () => {
   const [st, setSt] = useState<UpdateState>({ s: 'idle' });
+  // The Microsoft Store build is updated by the Store (store.rs).
+  const [fromStore, setFromStore] = useState(false);
+  useEffect(() => {
+    invoke<boolean>('is_store_app').then(setFromStore).catch(() => {});
+  }, []);
   useEffect(() => {
     let off: (() => void) | undefined;
     listen<number>('ivy://update-progress', (e) => setSt({ s: 'downloading', pct: e.payload }))
@@ -45,6 +50,18 @@ const UpdatesControl: React.FC = () => {
     invoke('install_update').catch((e) => setSt({ s: 'error', msg: `Update stopped: ${e}.` }));
   };
   const btn = 'px-3.5 py-1.5 rounded-xl text-[12px] font-medium transition-all';
+  if (fromStore)
+    return (
+      <div className="flex items-center gap-3">
+        <span className="text-[12px] text-white/60">Updates automatically from the Microsoft Store</span>
+        <button
+          onClick={() => void invoke('open_store_page')}
+          className={`${btn} text-white/80 bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.08] hover:text-white`}
+        >
+          Open in Store
+        </button>
+      </div>
+    );
   return (
     <div className="flex items-center gap-3">
       {st.s === 'current' && <span className="text-[12px] text-emerald-400">Up to date (v{st.current})</span>}
@@ -594,7 +611,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <Row
             title="Updates"
-            description={`You're on Ivy v${__IVY_VERSION__}. Ivy checks GitHub for a newer version only when you press the button, and never sends anything about you.`}
+            description={`You're on Ivy v${__IVY_VERSION__}. Ivy itself never checks for updates on its own, and never sends anything about you.`}
           >
             <UpdatesControl />
           </Row>

@@ -54,6 +54,12 @@ class RootErrorBoundary extends Component<Props, State> {
   }
 }
 
+// Right-click would show WebView2's browser menu (Back, Refresh, Print, More tools), and Refresh reloads Ivy
+// mid-use. Only text fields keep their menu (Cut, Copy, Paste). Found in the Store test, 2026-10-18.
+document.addEventListener('contextmenu', (e) => {
+  if (!(e.target as HTMLElement | null)?.closest('input, textarea, [contenteditable="true"]')) e.preventDefault();
+});
+
 // Absorb the AudioContext's cold-start cost (audio device init) now,
 // before the launch intro's impact sound needs to fire on time.
 soundEngine.warmUp();

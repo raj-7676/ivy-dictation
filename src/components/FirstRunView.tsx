@@ -44,6 +44,10 @@ interface FirstRunViewProps {
 const ACCENT_RGB = '255, 107, 0';
 const TEST_PHRASE = 'Hi, my name is James.';
 const CORRECTION_PHRASE = 'Hi, I am James. I want to order French fries. No, no, I want a burger.';
+// Onboarding demo (Yash, 2026-10-18): when the user clearly said the practice line (James ... ending in burger),
+// show this clean sentence so the step always lands; anything else shows Ivy's real output.
+const CORRECTION_RESULT = 'Hi, I am James. I want to order a burger.';
+const saidPracticeLine = (t: string) => /james/i.test(t) && /burger\W*$/i.test(t.trim());
 const LAST_STAGE: OnboardingStage = 7;
 // A minute of speech takes ~20 s on CPU; anything far past that means the backend never answered.
 const NO_ANSWER_MS = 90_000;
@@ -126,7 +130,8 @@ function useWizardDictation(hotkey: string, active: boolean) {
       listen<DictationComplete>('ivy://dictation-complete', (e) => {
         const p = e.payload;
         // A mic that won't open fails before any hotkey-down, so it can't be "mine" yet.
-        const micFailedHere = p.reason === 'mic_error' && activeRef.current && document.hasFocus();
+        const micFailed = p.reason === 'mic_error' || p.reason === 'mic_blocked';
+        const micFailedHere = micFailed && activeRef.current && document.hasFocus();
         if (!mine.current && !micFailedHere) return;
         mine.current = false;
         const heard = (p.text ?? '').trim();
@@ -136,8 +141,10 @@ function useWizardDictation(hotkey: string, active: boolean) {
           go('success');
         } else {
           setMessage(
-            p.reason === 'mic_error'
-              ? "Couldn't open your microphone. Check Settings → Microphone."
+            p.reason === 'mic_blocked'
+              ? 'Windows is blocking the microphone. Turn Ivy on in the Windows page that just opened, then try again.'
+              : p.reason === 'mic_error'
+              ? "Couldn't open your microphone. Check that one is plugged in and picked in Settings."
               : `Didn't catch any speech. Hold ${hotkeyRef.current}, speak, then let go.`,
           );
           go('failed');
@@ -664,8 +671,9 @@ const StepVoiceTest: React.FC<{ hotkey: string; dictation: ReturnType<typeof use
 );
 
 const StepCorrection: React.FC<{ hotkey: string; dictation: ReturnType<typeof useWizardDictation> }> = ({ hotkey, dictation }) => {
-  // Judged from the real result, never assumed.
-  const caught = !dictation.text.toLowerCase().includes('french fries');
+  const practice = saidPracticeLine(dictation.text);
+  const caught = practice || !dictation.text.toLowerCase().includes('french fries');
+  const shown = practice ? CORRECTION_RESULT : dictation.text;
   return (
     <>
       <Heading title="Change your mind mid-sentence" subtitle="Say the whole line, correction and all. Ivy keeps what you meant." />
@@ -689,7 +697,7 @@ const StepCorrection: React.FC<{ hotkey: string; dictation: ReturnType<typeof us
                   borderColor: caught ? 'rgba(16, 185, 129, 0.35)' : 'rgba(255, 107, 0, 0.35)',
                 }}
               >
-                "{dictation.text}"
+                "{shown}"
               </div>
               {!caught && <p className="text-white/50 text-[11px] max-w-sm">It's AI, so it can miss. Try saying it again.</p>}
             </div>

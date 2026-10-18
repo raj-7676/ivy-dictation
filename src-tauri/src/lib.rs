@@ -14,6 +14,7 @@ mod rulebooks;
 pub(crate) mod gpu_monitor;
 mod modifier_hotkey;
 mod spellcheck;
+mod store;
 mod update;
 pub mod lite;
 
@@ -526,12 +527,26 @@ fn load_user_stats(app: &tauri::AppHandle) -> UserStats {
     default_stats
 }
 
+/// `fs::rename(tmp, path)` for the write-then-rename saves below. Inside the Store package Windows redirects
+/// AppData writes, and renaming across that redirection fails with ERROR_NOT_SAME_DEVICE (os error 17): every
+/// save failed and left a *.tmp behind (Store test, 2026-10-18). There it copies over the target instead.
+fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    match fs::rename(tmp, path) {
+        Err(e) if e.raw_os_error() == Some(17) => {
+            // ponytail: a copy isn't atomic like a rename; only the Store build's redirected AppData gets here.
+            fs::copy(tmp, path)?;
+            fs::remove_file(tmp)
+        }
+        result => result,
+    }
+}
+
 fn save_user_stats_atomic(app: &tauri::AppHandle, stats: &UserStats) -> Result<(), String> {
     let path = stats_path(app);
     let tmp = path.with_extension("tmp");
     let json = serde_json::to_string_pretty(stats).map_err(|e| e.to_string())?;
     fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    fs::rename(tmp, path).map_err(|e| e.to_string())
+    replace_file(&tmp, &path).map_err(|e| e.to_string())
 }
 
 // Privacy retention: recordings and transcripts are deleted after 24 hours by default, or after up to
@@ -835,7 +850,7 @@ fn write_history_atomic(app: &tauri::AppHandle, sessions: &[DictationSession]) {
     let path = history_path(app);
     let tmp = path.with_extension("json.tmp");
     if fs::write(&tmp, &json).is_ok() {
-        let _ = fs::rename(&tmp, &path);
+        let _ = replace_file(&tmp, &path);
     }
 }
 
@@ -1234,6 +1249,11 @@ fn get_settings(app: tauri::AppHandle) -> SettingsConfig {
 // settings save over it.
 fn sync_autostart(app: &tauri::AppHandle, enabled: bool) {
     use tauri_plugin_autostart::ManagerExt;
+    #[cfg(windows)]
+    if store::is_packaged() {
+        store::set_startup_task(enabled);
+        return;
+    }
     let manager = app.autolaunch();
     let result = if enabled { manager.enable() } else { manager.disable() };
     if let Err(e) = result {
@@ -1325,7 +1345,7 @@ fn write_settings_atomic(app: &tauri::AppHandle, settings: &SettingsConfig) -> R
     let tmp = path.with_extension("tmp");
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    replace_file(&tmp, &path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1472,7 +1492,8 @@ struct DictationComplete {
     success: bool,
     // "" for the ordinary "no speech heard" case; "mic_error" specifically
     // when the microphone itself never opened, so the UI can tell the user
-    // the real cause instead of a generic "didn't hear anything" message.
+    // the real cause instead of a generic "didn't hear anything" message;
+    // "mic_blocked" when Windows' microphone privacy switch refused it.
     #[serde(default)]
     reason: String,
     active_app: String,
@@ -2479,7 +2500,10 @@ fn extract_audio(app: tauri::AppHandle, id: String) -> Result<String, String> {
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
     let dest = downloads.join(format!("Ivy Recording - {safe_ts} ({}).wav", session.id));
-    fs::copy(&session.audio_path, &dest).map_err(|e| e.to_string())?;
+    // Read + write, not fs::copy: the Store build's recordings are EFS-encrypted, and CopyFile carrying that over
+    // to Downloads failed with "could not be encrypted" (os error 6000, Store test 2026-10-18).
+    let bytes = fs::read(&session.audio_path).map_err(|e| e.to_string())?;
+    fs::write(&dest, bytes).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().into_owned())
 }
 
@@ -2674,9 +2698,13 @@ fn release_held_modifiers() {
         std::thread::sleep(std::time::Duration::from_millis(15));
     }
 
+    // Only keys still down: a key-up for a key that isn't pressed (a lone Alt-up after a Ctrl + Shift
+    // dictation) makes Win11 Notepad and Office show KeyTips, which swallow the Ctrl+V (Store test, 2026-10-18).
     for &k in MODIFIERS {
         unsafe {
-            keybd_event(k, 0, KEYEVENTF_KEYUP, 0);
+            if (GetAsyncKeyState(k as i32) as u16 & 0x8000) != 0 {
+                keybd_event(k, 0, KEYEVENTF_KEYUP, 0);
+            }
         }
     }
 }
@@ -3146,6 +3174,8 @@ fn handle_hotkey_down(app: &tauri::AppHandle) {
             log::error!("Ivy: couldn't start recording: {e}");
             *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = None;
             STARTING_DICTATION.store(false, Ordering::SeqCst);
+            // E_ACCESSDENIED: Windows' microphone privacy switch is off for Ivy (or for all desktop apps).
+            let blocked = e.to_string().contains("-2147024891");
             // Tell the UI right away instead of leaving it to guess for 15s —
             // there is no recorder to stop and no hotkey-up handler will ever
             // fire this dictation's completion, so this is the only signal.
@@ -3153,13 +3183,29 @@ fn handle_hotkey_down(app: &tauri::AppHandle) {
                 "ivy://dictation-complete",
                 DictationComplete {
                     success: false,
-                    reason: "mic_error".to_string(),
+                    reason: if blocked { "mic_blocked" } else { "mic_error" }.to_string(),
                     active_app: ctx.active_app.clone(),
                     session_id: String::new(),
                     pasted: false,
                     text: String::new(),
                 },
             );
+            // Say why instead of failing silently, and when Windows blocks the microphone open that settings page
+            // (once per run) so the switch is one click away. The setup wizard shows its own message.
+            static OPENED_MIC_SETTINGS: AtomicBool = AtomicBool::new(false);
+            if blocked && !OPENED_MIC_SETTINGS.swap(true, Ordering::SeqCst) {
+                let _ = std::process::Command::new("explorer").arg("ms-settings:privacy-microphone").spawn();
+            }
+            if !WIZARD_ACTIVE.load(Ordering::SeqCst) {
+                let notice = if blocked {
+                    "Microphone blocked · turn Ivy on in Windows Settings"
+                } else {
+                    "Couldn't open the microphone"
+                };
+                position_capsule_window(app);
+                bridge_capsule_show(app, true);
+                let _ = app.emit("ivy://notice", notice);
+            }
             // Nothing is actually recording — showing the capsule and
             // emitting hotkey-down here would leave the overlay stuck on
             // "recording"/"transcribing" forever, since hotkey-up finds
@@ -3230,6 +3276,28 @@ fn handle_hotkey_up(app: &tauri::AppHandle) {
             for_wizard,
         );
     });
+}
+
+/// Hands an Alt + Space press/release to one worker thread that runs `dictation_key` in order. The
+/// global-shortcut plugin calls its handler while holding its own lock, and delivers releases from its key-poll
+/// thread: handling a release inline (which shows/hides the capsule through the main thread) while the next
+/// press waited for that lock on the main thread froze Ivy on a quick double-tap (Store test, 2026-10-18).
+fn queue_dictation_key(app: &tauri::AppHandle, pressed: bool) {
+    static TX: std::sync::OnceLock<std::sync::mpsc::Sender<bool>> = std::sync::OnceLock::new();
+    let tx = TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        let app = app.clone();
+        std::thread::Builder::new()
+            .name("ivy-dictation-key".into())
+            .spawn(move || {
+                for pressed in rx {
+                    dictation_key(&app, pressed);
+                }
+            })
+            .expect("couldn't start the dictation-key thread");
+        tx
+    });
+    let _ = tx.send(pressed);
 }
 
 /// One press or release of the dictation key, from the OS hotkey (Alt + Space) or the Ctrl + Shift watcher.
@@ -3739,7 +3807,7 @@ pub fn run() {
                         }
                         return;
                     }
-                    dictation_key(app, event.state() == ShortcutState::Pressed);
+                    queue_dictation_key(app, event.state() == ShortcutState::Pressed);
                 })
                 .build(),
         )
@@ -3774,6 +3842,8 @@ pub fn run() {
             retry_model_download,
             update::check_for_update,
             update::install_update,
+            store::is_store_app,
+            store::open_store_page,
         ])
         .setup(move |app| {
             // Was debug-only — meant every `log::info!`/`log::warn!` call
@@ -3800,7 +3870,8 @@ pub fn run() {
             let first_launch = !settings_path(&app.handle()).exists();
             // Real Windows Run-key launch, not a manual one — see the
             // `--autostart` arg registered with the plugin above.
-            let launched_via_autostart = std::env::args().any(|a| a == "--autostart");
+            let launched_via_autostart =
+                std::env::args().any(|a| a == "--autostart") || store::launched_by_startup_task();
             let mut startup_settings = load_settings(&app.handle());
             // Anything else saved by an older version (e.g. a bare "Space" that would eat the spacebar) goes back
             // to the default, and the fixed held-back paste key is restored.
@@ -4012,6 +4083,10 @@ pub fn run() {
                 if !launched_via_autostart {
                     let _ = window.show();
                     let _ = window.set_focus();
+                    // Store build: Windows asks about the microphone now, while Ivy's window is in front,
+                    // instead of on the first dictation (where the prompt vanished with the hotkey).
+                    #[cfg(windows)]
+                    store::request_microphone();
                 }
             }
             Ok(())

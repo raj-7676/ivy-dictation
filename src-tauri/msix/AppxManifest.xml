@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ivy's Microsoft Store package. scripts/package-msix.mjs fills the {{...}} values from
+     src-tauri/msix/identity.json (copied from Partner Center > Ivy Dictation > Product identity). -->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap desktop uap5 rescap">
+
+  <Identity Name="{{NAME}}" Publisher="{{PUBLISHER}}" Version="{{VERSION}}" ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Ivy Dictation</DisplayName>
+    <PublisherDisplayName>{{PUBLISHER_DISPLAY_NAME}}</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Ivy" Executable="Ivy.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Ivy" Description="Offline voice dictation"
+        BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <!-- "Launch at startup" in Settings turns this on (src-tauri/src/store.rs). A Run-key entry from inside a
+             package never reaches Windows. -->
+        <desktop:Extension Category="windows.startupTask" Executable="Ivy.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="IvyStartup" Enabled="false" DisplayName="Ivy" />
+        </desktop:Extension>
+        <!-- "ivy" in the Run box or a terminal starts Ivy (and lets ui_test launch it with its own environment). -->
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="Ivy.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="ivy.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Ivy is a normal desktop app (global hotkey, paste into other apps), so it runs full trust. -->
+    <rescap:Capability Name="runFullTrust" />
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>

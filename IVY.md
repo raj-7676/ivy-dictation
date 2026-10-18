@@ -217,6 +217,10 @@ Measured on Yash's RTX 4060 laptop GPU and Intel Core i7 (§23):
 - `src-tauri/installer/hooks.nsh`: copies the two model files from next to the setup exe into `$INSTDIR\models\ivy-lite` (warns, non-silent installs only, if they're missing), deletes the model on uninstall, and asks before deleting user data.
 - `npm run setup-models` (`scripts/download-models.mjs`) downloads the model from the GitHub release for source builds. **The v0.1.4 release must exist with both gguf files attached for it to work.**
 
+- **Microsoft Store build (MSIX, Yash 2026-10-17)**: `npm run package-msix` (`scripts/package-msix.mjs`) builds the exe (`tauri build --no-bundle`) and packs `release/msix/Ivy-<version>.msix` from `src-tauri/msix/AppxManifest.xml` + `identity.json` (Partner Center > Ivy Dictation > Product identity: `Glow.co.IvyDictation`, publisher display name `Glow.co`, Store ID `9P420N80LXQJ`). Unlike the GitHub setup, the **model is inside the package** (no first-start download) along with the VC++ CRT and OpenMP DLLs. The Store signs it; upload the .msix in Partner Center. Store listing text: `src-tauri/msix/STORE_LISTING.md`. Privacy policy: `docs/privacy.html`.
+- Same exe for both channels; `src-tauri/src/store.rs` detects the package at runtime: updates come from the Store only (update.rs refuses; Settings shows "Open in Store"), Launch at startup uses the manifest StartupTask `IvyStartup` (a Run-key write inside a package never reaches Windows), and Windows' microphone consent is requested at launch. A blocked microphone (E_ACCESSDENIED) shows a capsule notice and opens Settings > Privacy > Microphone in both builds.
+- Try a build without the Store (Developer Mode on): `Add-AppxPackage -Register release\msix\Ivy-<version>\AppxManifest.xml`, start `shell:AppsFolder\Glow.co.IvyDictation_9sswsmg8pwss6!Ivy`. Remove with `Get-AppxPackage Glow.co.IvyDictation | Remove-AppxPackage`.
+
 ## 18. Build, deploy & debugging
 
 - **Prerequisites:** Rust, Node 18+, MSVC Build Tools, WebView2, CMake + Ninja, LLVM (`winget install LLVM.LLVM`), and the Vulkan SDK (`VULKAN_SDK`).

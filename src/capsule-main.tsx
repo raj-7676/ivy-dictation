@@ -23,6 +23,12 @@ function showFatalError(err: unknown) {
   root.appendChild(pre);
 }
 
+// Right-click would show WebView2's browser menu (Back, Refresh, Print, More tools), and Refresh reloads Ivy
+// mid-use. Only text fields keep their menu (Cut, Copy, Paste). Found in the Store test, 2026-10-18.
+document.addEventListener('contextmenu', (e) => {
+  if (!(e.target as HTMLElement | null)?.closest('input, textarea, [contenteditable="true"]')) e.preventDefault();
+});
+
 window.addEventListener('error', (e) => showFatalError(e.error ?? e.message));
 window.addEventListener('unhandledrejection', (e) => showFatalError(e.reason));
 

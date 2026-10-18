@@ -85,8 +85,17 @@ fn latest_release() -> Result<Release, String> {
     })
 }
 
+/// The Store build is updated by the Microsoft Store only (its policy, and a setup.exe can't replace a package).
+fn store_guard() -> Result<(), String> {
+    if crate::store::is_packaged() {
+        return Err("Ivy from the Microsoft Store is updated by the Store".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn check_for_update() -> Result<UpdateInfo, String> {
+    store_guard()?;
     let r = latest_release()?;
     Ok(UpdateInfo { newer: is_newer(&r.version, CURRENT), current: CURRENT.into(), latest: r.version, page: r.page })
 }
@@ -94,6 +103,7 @@ pub fn check_for_update() -> Result<UpdateInfo, String> {
 /// Downloads the newer setup, checks it, starts it and quits Ivy. Progress: `ivy://update-progress` (0-100).
 #[tauri::command]
 pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    store_guard()?;
     let handle = app.clone();
     let path = tauri::async_runtime::spawn_blocking(move || download_setup(&handle))
         .await

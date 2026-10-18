@@ -12,6 +12,7 @@
     "tauri": "tauri",
     "setup-models": "node scripts/download-models.mjs",
     "package-installer": "node scripts/package-installer.mjs",
+    "package-msix": "node scripts/package-msix.mjs",
     "checksums": "powershell -ExecutionPolicy Bypass -File scripts/generate-checksums.ps1"
   },
   "dependencies": {
