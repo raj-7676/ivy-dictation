@@ -184,6 +184,11 @@ pipeline, and the exe will look for the dev server instead of the bundled interf
 
 Tests: `cargo test --lib -- --test-threads=1` inside `src-tauri`.
 
+**On a Mac:** Xcode's command line tools (`xcode-select --install`), Rust, Node.js, CMake and Ninja
+(`brew install cmake ninja`), then the same `npm install` and `npx tauri build --bundles app,dmg`. llama.cpp
+builds with Metal; no Vulkan SDK is needed. `.github/workflows/macos.yml` does exactly this on GitHub's
+Apple-silicon runners.
+
 More detail: [ARCHITECTURE.md](ARCHITECTURE.md) (how it fits together), [RULEBOOKS.md](RULEBOOKS.md)
 (the formatting and tone rules), [IVY.md](IVY.md) (full engineering notes).
 

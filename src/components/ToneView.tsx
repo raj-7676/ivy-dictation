@@ -1,6 +1,9 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Plus, X } from 'lucide-react';
 import { SettingsConfig, TonePreset } from '../types';
+import { IS_LINUX, IS_MAC, PAGE_COLUMN, useDesktop } from '../utils/platform';
+import { useEscape } from '../utils/useEscape';
 
 interface ToneViewProps {
   settings: SettingsConfig;
@@ -43,11 +46,101 @@ const InUse: React.FC = () => (
   </span>
 );
 
+/** "Slack.app" reads "Slack", Linux's "discord" reads "Discord" and "Gnome-terminal" the app menu's "Terminal"
+ *  (`names`, from `useAppNames`); the list keeps the bundle's full name or the window class, which is what Ivy
+ *  matches on (lib.rs). */
+const appLabel = (app: string, names: Record<string, string> = {}) => {
+  const name = app.replace(/\.app$/i, '');
+  return IS_LINUX ? names[app] ?? name.charAt(0).toUpperCase() + name.slice(1) : name;
+};
+
+/** Linux: the app menu's names for window classes (lib.rs `app_names`). A window class alone read "Gnome-terminal"
+ *  and "Firefox_firefox" (a tester's PC, 2026-10-10). */
+const useAppNames = (classes: string[]) => {
+  const [names, setNames] = useState<Record<string, string>>({});
+  const key = classes.join('\n');
+  useEffect(() => {
+    if (!IS_LINUX || classes.length === 0) return;
+    invoke<string[]>('app_names', { classes })
+      .then((found) => {
+        if (!Array.isArray(found)) return;
+        const add = Object.fromEntries(classes.map((c, i) => [c, found[i] ?? c]));
+        setNames((old) => ({ ...old, ...add }));
+      })
+      .catch(() => {});
+  }, [key]);
+  return names;
+};
+
+const addAppStyle =
+  'inline-flex items-center gap-1.5 cursor-pointer border border-dashed border-white/[0.16] hover:border-white/[0.3] rounded-full px-3.5 py-1.5 text-[12px] text-white/70 transition-colors duration-150';
+
+/** macOS and Linux: an app is picked from the ones running now; an .app bundle can't go through a file picker, and a
+ *  Linux program is known by its window. */
+const RunningAppPicker: React.FC<{ apps: string[]; onPick: (app: string) => void }> = ({ apps, onPick }) => {
+  const [open, setOpen] = useState(false);
+  const [running, setRunning] = useState<string[] | null>(null);
+  useEscape(open, () => setOpen(false));
+  const show = () => {
+    setRunning(null);
+    setOpen(true);
+    invoke<string[]>('list_running_apps')
+      .then(setRunning)
+      .catch(() => setRunning([]));
+  };
+  const choices = (running ?? []).filter((r) => !apps.some((a) => a.toLowerCase() === r.toLowerCase()));
+  const names = useAppNames(choices);
+  // The last row's list opened past the window's bottom edge (a tester's PC, 2026-10-11); the page scrolls to show it.
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open) menuRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [open, running]);
+  return (
+    <div className="relative">
+      <button type="button" onClick={show} className={addAppStyle} title="Pick from the apps open right now">
+        <Plus className="w-3.5 h-3.5" style={{ color: `rgb(${ACCENT_RGB})` }} />
+        Add app
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div
+            ref={menuRef}
+            className="absolute z-20 top-full left-0 mt-1.5 min-w-[220px] max-h-64 overflow-y-auto rounded-2xl py-1"
+            style={{ backgroundColor: 'rgba(16, 13, 20, 0.97)', border: '1px solid rgba(255,255,255,0.1)' }}
+          >
+            {running === null ? (
+              <div className="px-3.5 py-2 text-[12px] text-white/50">Looking…</div>
+            ) : choices.length === 0 ? (
+              <div className="px-3.5 py-2 text-[12px] text-white/50 max-w-[260px]">No other apps are open. Open the app first.</div>
+            ) : (
+              choices.map((app) => (
+                <button
+                  key={app}
+                  type="button"
+                  onClick={() => {
+                    onPick(app);
+                    setOpen(false);
+                  }}
+                  className="w-full text-left px-3.5 py-2 text-[12px] text-white/80 hover:bg-white/[0.07] transition-colors duration-150 whitespace-nowrap"
+                >
+                  {appLabel(app, names)}
+                </button>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 const AppList: React.FC<{
   tone: TonePreset;
   apps: string[];
   onChange: (apps: string[]) => void;
 }> = ({ tone, apps, onChange }) => {
+  const names = useAppNames(apps);
   // Windows' own file picker: only the program's name (e.g. "brave.exe") is kept, never its path.
   const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const name = e.target.files?.[0]?.name;
@@ -64,7 +157,7 @@ const AppList: React.FC<{
             className="inline-flex items-center gap-2 pl-3.5 pr-2 py-1.5 rounded-full text-[12px] text-white/85"
             style={{ backgroundColor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)' }}
           >
-            {app}
+            {appLabel(app, names)}
             <button
               onClick={() => onChange(apps.filter((a) => a !== app))}
               className="text-white/30 hover:text-red-400 transition-colors duration-150"
@@ -74,20 +167,22 @@ const AppList: React.FC<{
             </button>
           </span>
         ))}
-        <label
-          className="inline-flex items-center gap-1.5 cursor-pointer border border-dashed border-white/[0.16] hover:border-white/[0.3] rounded-full px-3.5 py-1.5 text-[12px] text-white/70 transition-colors duration-150"
-          title="Pick the app's .exe file"
-        >
-          <Plus className="w-3.5 h-3.5" style={{ color: `rgb(${ACCENT_RGB})` }} />
-          Add app
-          <input type="file" accept=".exe" onChange={pick} className="hidden" />
-        </label>
+        {IS_MAC || IS_LINUX ? (
+          <RunningAppPicker apps={apps} onPick={(app) => onChange([...apps, app])} />
+        ) : (
+          <label className={addAppStyle} title="Pick the app's .exe file">
+            <Plus className="w-3.5 h-3.5" style={{ color: `rgb(${ACCENT_RGB})` }} />
+            Add app
+            <input type="file" accept=".exe" onChange={pick} className="hidden" />
+          </label>
+        )}
       </div>
     </div>
   );
 };
 
 export const ToneView: React.FC<ToneViewProps> = ({ settings, onUpdateSettings }) => {
+  const desktop = useDesktop();
   const inUse = settings.activeTonePreset;
   const shown = TONES.find((t) => t.id === inUse);
   // Three modes (Yash, 2026-10-06): a click takes effect at once for every app not added below.
@@ -106,7 +201,7 @@ export const ToneView: React.FC<ToneViewProps> = ({ settings, onUpdateSettings }
 
   return (
     <div id="screen-tone" className="flex-1 flex flex-col h-full overflow-y-auto">
-      <div className="px-8 pt-7 pb-10 max-w-2xl w-full mx-auto space-y-7">
+      <div className={`px-8 pt-7 pb-10 ${PAGE_COLUMN} space-y-7`}>
         <div>
           <h1 className="text-[22px] font-semibold tracking-tight text-white/95">Tone</h1>
           <p className="text-[12.5px] text-white/40 mt-1.5 leading-relaxed max-w-md">
@@ -147,8 +242,11 @@ export const ToneView: React.FC<ToneViewProps> = ({ settings, onUpdateSettings }
           <div>
             <div className="text-[13px] font-medium text-white/85">Add your apps</div>
             <p className="text-[11.5px] text-white/30 mt-1">
-              Click "Add app" and pick the program's .exe (for example brave.exe, usually in
-              C:\Program Files). That program then always uses that mode.
+              {IS_MAC || IS_LINUX
+                ? 'Open the app, then click "Add app" and pick it from the apps open right now. That app then always uses that mode.'
+                : `Click "Add app" and pick the program's .exe (for example brave.exe, usually in C:\\Program Files). That program then always uses that mode.`}
+              {desktop?.wayland &&
+                ' On this desktop (Wayland) Ivy can tell apart only the apps it lists there; every other app gets the mode clicked above.'}
             </p>
           </div>
           {TONES.map((tone) => (

@@ -118,6 +118,11 @@ impl LiteEngine {
 
         let backend = get_or_init_backend()?;
         let mparams = LlamaModelParams::default().with_n_gpu_layers(if is_cpu_mode { 0 } else { 99 });
+        // Linux: with no layers on it, llama.cpp still sent the prompt's large operations to the graphics card
+        // (op_offload) and kept a 645 MB compute buffer there in CPU mode (a tester's PC, 2026-10-11). An empty
+        // device list keeps CPU mode off the graphics card, as Settings says.
+        #[cfg(target_os = "linux")]
+        let mparams = if is_cpu_mode { mparams.with_devices(&[]).map_err(|e| e.to_string())? } else { mparams };
         let model = LlamaModel::load_from_file(&backend, &model_path, &mparams)
             .map_err(|e| format!("Lite model load failed: {e}"))?;
 
@@ -384,6 +389,10 @@ mod tests {
         reader.samples::<i16>().map(|s| s.unwrap() as f32 / i16::MAX as f32).collect()
     }
 
+    // What the Windows build (Vulkan and CPU alike) writes for tests/fixtures/sample.wav and real_speech_sample.wav.
+    const REFERENCE_SAMPLE: &str = "The quick brown fox jumps over the lazy dog.";
+    const REFERENCE_REAL_SPEECH: &str = "Delete requirements.rs, we don't need it anymore.";
+
     #[derive(Deserialize)]
     struct GoldenItem {
         audio: String,
@@ -455,6 +464,61 @@ mod tests {
         println!("============================================================\n");
 
         assert!(matches >= 57, "Expected at least 57/60 matches, got {matches}/{total}");
+    }
+
+    /// The same speech gives the same text on every backend Ivy ships: Vulkan and CPU on Windows and Linux, Metal on a Mac
+    /// (IVY.md §19; a backend can hear differently, as llama.cpp's Voxtral pooling once did). The expected text
+    /// is the Windows build's output. Needs the model files:
+    /// `IVY_MODELS_DIR=<folder holding ivy-lite/> cargo test --lib model_matches_reference -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn model_matches_reference() {
+        let models_dir = std::env::var("IVY_MODELS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models"));
+        assert!(models_dir.join(LITE_DIR).join(MODEL_NAME).exists(), "no model under {}", models_dir.display());
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures");
+        let cases = [("sample.wav", REFERENCE_SAMPLE), ("real_speech_sample.wav", REFERENCE_REAL_SPEECH)];
+        // Every CPU run must match. A Mac's GPU result is only reported unless IVY_REQUIRE_METAL is set: GitHub's
+        // virtual Macs have a paravirtual GPU of the Apple5 family, without the simdgroup operations every real
+        // Apple-silicon GPU has (Apple7 and later), and llama.cpp's fallback kernels for it write "!!!!" (with or
+        // without flash attention, 2026-10-10). The app checks for that itself and falls back to the CPU, lib.rs
+        // `gpu_check`.
+        let require_gpu = cfg!(not(target_os = "macos")) || std::env::var_os("IVY_REQUIRE_METAL").is_some();
+        let devices = llama_cpp_2::list_llama_ggml_backend_devices();
+        for d in &devices {
+            println!("device: {} {} ({:?}, {} MB)", d.backend, d.description, d.device_type, d.memory_total >> 20);
+        }
+        // No GPU at all (GitHub's Linux runners): only the CPU can be checked. llama.cpp leaves software Vulkan
+        // (Mesa's llvmpipe) out unless GGML_VK_VISIBLE_DEVICES forces it, and its own CI runs only small operation
+        // tests there, never a model: llvmpipe emulates a GPU on the CPU, and 120 s didn't cover one 3 s clip
+        // (2026-10-10).
+        let has_gpu = devices
+            .iter()
+            .any(|d| matches!(d.device_type, llama_cpp_2::LlamaBackendDeviceType::Gpu | llama_cpp_2::LlamaBackendDeviceType::IntegratedGpu));
+        for cpu in [false, true] {
+            if !cpu && !has_gpu {
+                println!("No GPU here: only the CPU is checked");
+                continue;
+            }
+            unload_engine();
+            let t = Instant::now();
+            let eng = engine(&models_dir, cpu).expect("the model loads");
+            let backend = if cpu { "CPU" } else if cfg!(target_os = "macos") { "Metal" } else { "Vulkan" };
+            println!("{backend}: model loaded in {} ms", t.elapsed().as_millis());
+            for (file, expected) in cases {
+                let samples = read_wav(&fixtures.join(file));
+                let t = Instant::now();
+                let text = eng.transcribe(&samples, &[], Duration::from_secs(120)).expect("transcribes");
+                println!("{backend} {file}: {text:?} in {} ms", t.elapsed().as_millis());
+                if cpu || require_gpu {
+                    assert_eq!(text.trim(), expected, "{backend} heard {file} differently");
+                } else if text.trim() != expected {
+                    println!("{backend} differs from the reference (reported, not asserted)");
+                }
+            }
+        }
+        unload_engine();
     }
 
     #[test]

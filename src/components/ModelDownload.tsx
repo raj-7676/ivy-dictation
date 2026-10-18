@@ -5,6 +5,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AlertTriangle, CheckCircle2, Download, RefreshCw, ShieldCheck, VolumeX, WifiOff, X } from 'lucide-react';
 import { IvyWordmark } from './IvyWordmark';
 import INTRO_VIDEO from '../assets/ivy-intro.mp4';
+import { IS_LINUX, IS_MAC, keyLabel } from '../utils/platform';
+import { INITIAL_SETTINGS } from '../defaults';
 
 // Ivy downloads its speech model itself on first start (src-tauri/src/model.rs); setup only copies it in for
 // an offline install. First start: a full screen (ModelDownloadScreen), then the setup wizard opens by itself
@@ -105,7 +107,7 @@ export const ModelDownloadBanner: React.FC<{ hotkey: string }> = ({ hotkey }) =>
       <Shell tone="ok">
         <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
         <span className="text-white/90 font-semibold">Speech model ready.</span>
-        <span className="text-white/60">Hold {hotkey || 'Alt + Space'} anywhere and talk.</span>
+        <span className="text-white/60">Hold {keyLabel(hotkey || INITIAL_SETTINGS.hotkey)} anywhere and talk.</span>
       </Shell>
     );
   }
@@ -196,6 +198,30 @@ export const IntroFilm: React.FC<{
   // effect below must not restart (it would leave and re-enter full screen each time).
   const doneRef = useRef(onDone);
   doneRef.current = onDone;
+  // Linux: WebKitGTK's video player can't open Ivy's own tauri:// address (it reported FormatError, so the film
+  // closed the moment it opened, on a tester's PC, 2026-10-10), but it plays the same file from memory.
+  const [src, setSrc] = useState<string | undefined>(IS_LINUX ? undefined : INTRO_VIDEO);
+  const playRef = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    if (!IS_LINUX) return;
+    let url: string | undefined;
+    let gone = false;
+    fetch(INTRO_VIDEO)
+      .then((r) => r.blob())
+      .then((b) => {
+        if (gone) return;
+        url = URL.createObjectURL(b);
+        setSrc(url);
+      })
+      .catch(() => !gone && doneRef.current());
+    return () => {
+      gone = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, []);
+  useEffect(() => {
+    if (IS_LINUX && src) playRef.current();
+  }, [src]);
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
@@ -211,9 +237,10 @@ export const IntroFilm: React.FC<{
         setMuted(true);
         return v.play().catch(() => undefined);
       });
+    playRef.current = play;
     onPlaying(true);
     win?.setFullscreen(true).catch(() => undefined);
-    play();
+    if (v.src) play();
     // Polled: a hidden WebView2 page gets no visibilitychange, which is how the first try kept playing in the tray.
     const check = async () => {
       if (stopped || !win) return;
@@ -256,14 +283,17 @@ export const IntroFilm: React.FC<{
   const ready = status?.state === 'ready';
   return (
     <div className="fixed inset-0 z-[80] bg-black flex items-center justify-center select-none" onContextMenu={(e) => e.preventDefault()}>
+      {/* A system that can't decode the film (a Linux without an H.264 decoder for GStreamer) moves on rather
+          than holding a black screen that can't be skipped on first start. */}
       <video
         ref={ref}
-        src={INTRO_VIDEO}
+        src={src}
         playsInline
         preload="auto"
         disablePictureInPicture
         className="w-full h-full object-contain"
         onEnded={onDone}
+        onError={onDone}
       />
       {muted && (
         <button
@@ -391,7 +421,7 @@ export const ModelDownloadScreen: React.FC<{
         {!failed && !ready && (
           <p className="text-xs text-white/40 text-center max-w-md">
             Setup opens by itself when the download is done. You can close this window meanwhile: Ivy keeps
-            downloading from the tray and comes back when it is ready.
+            downloading {IS_MAC ? 'from the menu bar' : IS_LINUX ? 'in the background' : 'from the tray'} and comes back when it is ready.
           </p>
         )}
       </div>

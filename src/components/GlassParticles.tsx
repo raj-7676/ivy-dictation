@@ -1,9 +1,17 @@
 import React, { useEffect, useRef } from 'react';
+import { SOFTWARE_PAINT } from '../utils/platform';
+
+// Linux: a moving mote repaints the whole window on every frame there (SOFTWARE_PAINT): a full core, plus half of the
+// X server's, in a maximized window, which made every click and page wait (a tester's PC, 2026-10-11). The motes are
+// drawn once there and stay still.
+const STILL = SOFTWARE_PAINT;
 
 interface GlassParticlesProps {
   /** Accent as "r, g, b" — e.g. "255, 107, 0". */
   accentRgb: string;
   count?: number;
+  /** Stops the drift (the motes stay where they are) while nobody can see it move. */
+  paused?: boolean;
 }
 
 interface Particle {
@@ -23,8 +31,14 @@ interface Particle {
 
 // Drifting crystalline glass motes behind the app chrome — the ambient layer
 // that makes the window read as glass rather than a flat dark rectangle.
-export const GlassParticles: React.FC<GlassParticlesProps> = ({ accentRgb, count = 26 }) => {
+export const GlassParticles: React.FC<GlassParticlesProps> = ({ accentRgb, count = 26, paused = false }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pausedRef = useRef(paused);
+  const resumeRef = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    pausedRef.current = paused;
+    if (!paused) resumeRef.current();
+  }, [paused]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -39,6 +53,14 @@ export const GlassParticles: React.FC<GlassParticlesProps> = ({ accentRgb, count
       if (!canvas.parentElement) return;
       width = canvas.width = canvas.parentElement.clientWidth;
       height = canvas.height = canvas.parentElement.clientHeight;
+      // A resize empties the canvas; still motes are spread over the new size and drawn again.
+      if (STILL) {
+        for (const p of particles) {
+          p.x = Math.random() * width;
+          p.y = Math.random() * height;
+        }
+        resumeRef.current();
+      }
     });
     if (canvas.parentElement) resizeObserver.observe(canvas.parentElement);
 
@@ -58,10 +80,14 @@ export const GlassParticles: React.FC<GlassParticlesProps> = ({ accentRgb, count
       rotSpeed: (Math.random() - 0.5) * 0.02,
     }));
 
-    let animFrame: number;
+    let animFrame = 0;
     let lastTime = performance.now();
 
     const render = (time: number) => {
+      if (pausedRef.current) {
+        animFrame = 0;
+        return;
+      }
       const dt = Math.min(32, time - lastTime) / 16;
       lastTime = time;
       ctx.clearRect(0, 0, width, height);
@@ -127,11 +153,17 @@ export const GlassParticles: React.FC<GlassParticlesProps> = ({ accentRgb, count
         ctx.restore();
       }
 
-      animFrame = requestAnimationFrame(render);
+      animFrame = STILL ? 0 : requestAnimationFrame(render);
     };
 
+    resumeRef.current = () => {
+      if (animFrame) return;
+      lastTime = performance.now();
+      animFrame = requestAnimationFrame(render);
+    };
     animFrame = requestAnimationFrame(render);
     return () => {
+      resumeRef.current = () => undefined;
       cancelAnimationFrame(animFrame);
       resizeObserver.disconnect();
     };

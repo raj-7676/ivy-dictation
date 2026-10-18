@@ -1,20 +1,22 @@
 //! "Ctrl + Shift" as the dictation key (Yash, 2026-10-06: two choices only, Alt + Space or Ctrl + Shift).
-//! Windows can't register a modifier-only combo as a hotkey, so a small thread looks at the keyboard state
-//! every 15 ms. (A low-level keyboard hook was tried first and never fired on Yash's laptop.) Nothing is
+//! Windows (and macOS, and Linux) can't register a modifier-only combo as a hotkey, so a small thread looks at the
+//! keyboard state every 15 ms. (A low-level keyboard hook was tried first and never fired on Yash's laptop.) Nothing is
 //! swallowed: Ctrl+Shift+T and other shortcuts still work, because any other key pressed while both are
 //! held cancels the dictation instead of finishing it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub const SPEC: &str = "Ctrl + Shift";
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static STARTED: AtomicBool = AtomicBool::new(false);
 const TICK: Duration = Duration::from_millis(15);
-/// Both keys must be held this long with no other key before a recording starts, so a Ctrl+Shift+X
-/// shortcut never flashes the capsule. A release within it is still a tap (double-tap = hands-free).
-const SETTLE: Duration = Duration::from_millis(150);
+/// Both keys must be held this many ticks (150 ms) with no other key before a recording starts, so a
+/// Ctrl+Shift+X shortcut never flashes the capsule. A release within it is still a tap (double-tap = hands-free).
+/// Counted in ticks, not clock time, so a late wake-up (a busy machine, a Mac's timer coalescing) can't cut the
+/// wait short before the other key has been seen.
+const SETTLE_TICKS: u32 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Key {
@@ -54,8 +56,20 @@ fn read_keyboard() -> Keys {
         let other = (0x01..=0xFE).filter(|vk| !matches!(vk, 0x10 | 0x11 | 0xA0..=0xA3)).any(held);
         Keys { ctrl: held(0x11), shift: held(0x10), other }
     }
-    #[cfg(not(windows))]
-    Keys::default()
+    // macOS: the same poll over the keyboard state (Control + Shift is free there too: Mac shortcuts use Command).
+    #[cfg(target_os = "macos")]
+    {
+        let (ctrl, shift, other) = crate::macos::ctrl_shift_state();
+        Keys { ctrl, shift, other }
+    }
+    // Linux: the X server's keyboard state, or ivy-keys' on Wayland (src/linux.rs). Alt and Super count as other
+    // keys, as on Windows.
+    #[cfg(target_os = "linux")]
+    {
+        use crate::linux::{ALT, CTRL, OTHER, SHIFT, SUPER};
+        let k = crate::linux::keys();
+        Keys { ctrl: k & CTRL != 0, shift: k & SHIFT != 0, other: k & (ALT | SUPER | OTHER) != 0 }
+    }
 }
 
 /// The watcher loop. Returns only when `read` panics (tests); keyboard and switch are passed in so the
@@ -79,9 +93,8 @@ fn watch(on_key: &dyn Fn(Key), read: &dyn Fn() -> Keys, enabled: &dyn Fn() -> bo
             continue;
         }
         // Both down: settle, then record until either is let go.
-        let started = Instant::now();
         let mut released = false;
-        while started.elapsed() < SETTLE {
+        for _ in 0..SETTLE_TICKS {
             std::thread::sleep(TICK);
             let k = read();
             if k.other {
