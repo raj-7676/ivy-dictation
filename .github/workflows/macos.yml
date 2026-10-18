@@ -4,7 +4,7 @@ name: macOS Build
 # speech model hears the same on Metal as on Windows.
 on:
   push:
-    branches: [ "macos-port" ]
+    branches: [ "main", "macos-port", "release-*" ]
     # Notes alone don't change the app.
     paths-ignore: [ "**.md", "docs/**" ]
   workflow_dispatch:
