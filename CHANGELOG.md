@@ -2,6 +2,16 @@
 
 All notable changes to Ivy. Downloads are on the [Releases page](https://github.com/raj-7676/ivy-dictation/releases).
 
+## 0.2.9 (2026-10-18)
+
+- **Ivy is coming to the Microsoft Store.** The Store version installs in one step with the speech model included (no download on first start), shows no "Windows protected your PC" warning, and the Store keeps it updated. The download from this page stays too: both are the same Ivy, released on the same day.
+- **Linux joins the main release.** The .deb and .rpm packages are now part of every release next to the Windows setup, instead of a separate Linux release.
+- **Fixed: Ivy could freeze completely** when you tapped the dictation key twice quickly (the hands-free double-tap). Tested with dozens of double-taps at every speed.
+- **Fixed: a paste could get lost in Notepad or Office.** Ivy released keys you weren't holding before pasting, and those apps then opened their menu shortcuts and ate the paste.
+- **A blocked microphone now says so.** If Windows' privacy settings block the microphone, Ivy shows "Microphone blocked" and opens the right Windows settings page, instead of silently recording nothing.
+- **No browser menu on right-click.** Right-clicking inside Ivy showed Back, Refresh and Print; Refresh reloaded Ivy mid-use. Text boxes keep Cut, Copy and Paste.
+- Setup wizard: clearer microphone messages, and the self-correction step shows the clean sentence.
+
 ## 0.2.8 (2026-10-09)
 
 - **Fixed: a black window when opening Ivy after a restart.** Ivy starts hidden with Windows; opening it from the Start menu or a shortcut then showed only a black screen, until you minimized and restored it. It now opens normally every time.

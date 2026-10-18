@@ -4,7 +4,7 @@ name: Linux Build
 # Linux as on Windows. The runners have no GPU, so that check runs on the CPU, the way Ivy runs on a PC without one.
 on:
   push:
-    branches: [ "linux-port" ]
+    branches: [ "main", "linux-port" ]
     # Notes alone don't change the app.
     paths-ignore: [ "**.md", "docs/**" ]
   workflow_dispatch:
