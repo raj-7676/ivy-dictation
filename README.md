@@ -140,6 +140,8 @@ On an X11 desktop (Linux Mint, or "Ubuntu on Xorg" picked at the login screen) I
 Wayland (Ubuntu's and Fedora's default) Ctrl + Shift is the only key, and text Ivy can't paste waits in
 History. Tested on Ubuntu 24.04 with X11; Wayland is still being tested.
 
+Not available yet for Arch, ARM computers (such as a Raspberry Pi) or 32-bit PCs.
+
 ### System requirements
 
 - Windows 10 or 11, 64-bit (tested on Windows 11). Setup takes care of the rest:

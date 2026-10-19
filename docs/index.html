@@ -237,6 +237,7 @@
             transition: background .2s; }
     .copy:hover { background: rgba(255,255,255,0.06); }
     .cmd-note { color: var(--dim); font-size: 14px; margin-top: 14px; }
+    #linux { scroll-margin-top: 96px; }
 
     footer { border-top: 1px solid var(--line); padding: 40px 0 56px; color: var(--muted); font-size: 14px; }
     footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; }
@@ -325,7 +326,7 @@
           <p class="lead reveal" style="--i:1">Offline dictation that writes what you meant, even when you change your mind mid-sentence. Free, private, and fast on any PC.</p>
           <div class="ctas reveal" style="--i:2">
             <a class="btn primary" href="https://apps.microsoft.com/detail/9P420N80LXQJ"><i class="ph-fill ph-windows-logo"></i>Download for Windows</a>
-            <a class="btn ghost" href="https://github.com/raj-7676/ivy-dictation/releases/latest"><i class="ph-fill ph-linux-logo"></i>Download for Linux</a>
+            <a class="btn ghost" href="#linux"><i class="ph-fill ph-linux-logo"></i>Download for Linux</a>
           </div>
           <p class="cmd-note reveal" style="--i:3">Windows link opens the Microsoft Store. Prefer a setup file? <a href="https://github.com/raj-7676/ivy-dictation/releases/latest">Get it from GitHub</a>.</p>
         </div>
@@ -466,7 +467,7 @@
         <p class="lead reveal" style="--i:1">Windows 10 and 11, or Linux (.deb and .rpm). Free to use, forever.</p>
         <div class="ctas reveal" style="--i:2">
           <a class="btn primary" href="https://apps.microsoft.com/detail/9P420N80LXQJ"><i class="ph-fill ph-windows-logo"></i>Download for Windows</a>
-          <a class="btn ghost" href="https://github.com/raj-7676/ivy-dictation/releases/latest"><i class="ph-fill ph-linux-logo"></i>Download for Linux</a>
+          <a class="btn ghost" href="#linux"><i class="ph-fill ph-linux-logo"></i>Download for Linux</a>
         </div>
         <p class="cmd-note reveal" style="--i:3">Windows link opens the Microsoft Store. Prefer a setup file? <a href="https://github.com/raj-7676/ivy-dictation/releases/latest">Get it from GitHub</a>.</p>
         <div class="cmd reveal" style="--i:3">
@@ -474,6 +475,18 @@
           <button class="copy" id="copy" type="button"><i class="ph ph-copy"></i><span>Copy</span></button>
         </div>
         <p class="cmd-note reveal">Or install on Windows from PowerShell with one command.</p>
+        <p class="cmd-note reveal" id="linux" style="margin-top:56px">On Linux, open a terminal and paste the line for your system.</p>
+        <div class="cmd reveal" style="margin-top:14px">
+          <code><span>wget</span> https://github.com/raj-7676/ivy-dictation/releases/download/v0.2.9/Ivy_0.2.9_amd64.deb <span>&amp;&amp; sudo apt install</span> ./Ivy_0.2.9_amd64.deb</code>
+          <button class="copy" type="button"><i class="ph ph-copy"></i><span>Copy</span></button>
+        </div>
+        <p class="cmd-note reveal">Ubuntu 22.04+, Linux Mint 21+, Debian 12</p>
+        <div class="cmd reveal" style="margin-top:24px">
+          <code><span>curl -LO</span> https://github.com/raj-7676/ivy-dictation/releases/download/v0.2.9/Ivy-0.2.9-1.x86_64.rpm <span>&amp;&amp; sudo dnf install</span> ./Ivy-0.2.9-1.x86_64.rpm</code>
+          <button class="copy" type="button"><i class="ph ph-copy"></i><span>Copy</span></button>
+        </div>
+        <p class="cmd-note reveal">Fedora 37+</p>
+        <p class="cmd-note reveal" style="max-width:640px;margin-inline:auto">Then open Ivy from your apps menu and hold Ctrl + Shift to talk. Ivy works fully on X11 desktops (Linux Mint, or "Ubuntu on Xorg" at the login screen). On Wayland, the default on Ubuntu and Fedora, Ctrl + Shift is the only hotkey and support is still being tested. Not available yet for Arch, ARM or 32-bit PCs. <a href="https://github.com/raj-7676/ivy-dictation#linux">Full Linux guide</a>.</p>
       </div>
     </section>
   </main>
@@ -516,12 +529,12 @@
     });
 
     // Copy the install command.
-    document.getElementById('copy').addEventListener('click', async e => {
-      const label = e.currentTarget.querySelector('span');
-      try { await navigator.clipboard.writeText(document.getElementById('cmd').textContent); label.textContent = 'Copied'; }
+    document.querySelectorAll('.copy').forEach(b => b.addEventListener('click', async () => {
+      const label = b.querySelector('span');
+      try { await navigator.clipboard.writeText(b.parentElement.querySelector('code').textContent); label.textContent = 'Copied'; }
       catch { label.textContent = 'Select it'; }
       setTimeout(() => label.textContent = 'Copy', 1800);
-    });
+    }));
 
     // Hero demo. Each part of what is said is kept (k) or dropped (d); out marks highlighted words with *.
     const demos = [
