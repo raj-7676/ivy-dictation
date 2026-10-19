@@ -8,7 +8,7 @@ into whatever you were typing in: email, chat, documents, code editors, browsers
 Everything happens on your own computer. No account, no subscription, no internet connection, no
 cloud. Your voice never leaves your PC.
 
-**[Download Ivy for Windows](https://github.com/raj-7676/ivy-dictation/releases/latest)**
+**[Get Ivy for Windows from the Microsoft Store](https://apps.microsoft.com/detail/9P420N80LXQJ)** (or [download the setup file](https://github.com/raj-7676/ivy-dictation/releases/latest))
 
 **[Download Ivy for Linux](https://github.com/raj-7676/ivy-dictation/releases/latest)** ([install steps](#linux))
 
@@ -86,7 +86,12 @@ See [SECURITY.md](SECURITY.md) for the security details.
 
 ## Installing
 
-Pick one of the two ways. Both install the same Ivy.
+Pick one of the three ways. All install the same Ivy.
+
+### Microsoft Store (recommended)
+
+Get Ivy from the **[Microsoft Store](https://apps.microsoft.com/detail/9P420N80LXQJ)**. No security warning, and the Store keeps Ivy updated for you.
+On first start Ivy downloads its speech model once, then the setup wizard opens.
 
 ### Option 1: one command (easiest)
 
