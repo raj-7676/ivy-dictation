@@ -10,6 +10,8 @@ cloud. Your voice never leaves your PC.
 
 **[Get Ivy for Windows from the Microsoft Store](https://apps.microsoft.com/detail/9P420N80LXQJ)** (or [download the setup file](https://github.com/raj-7676/ivy-dictation/releases/latest))
 
+Website: **[raj-7676.github.io/ivy-dictation](https://raj-7676.github.io/ivy-dictation/)**
+
 **[Download Ivy for Linux](https://github.com/raj-7676/ivy-dictation/releases/latest)** ([install steps](#linux))
 
 ![Ivy turning "um, send it Tuesday, no wait, Thursday at 3" into "Send it Thursday at 3 PM."](docs/ivy-teaser.webp)
