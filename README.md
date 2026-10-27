@@ -96,6 +96,7 @@ See [SECURITY.md](SECURITY.md) for the security details.
 
 Questions or ideas? Ask in [Discussions](https://github.com/raj-7676/ivy-dictation/discussions).
 Found a mistake in what Ivy typed? [Open an issue](https://github.com/raj-7676/ivy-dictation/issues).
+Anything else (press, reviews, partnerships): glow.co79@gmail.com.
 
 ---
 
