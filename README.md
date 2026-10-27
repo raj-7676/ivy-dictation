@@ -8,7 +8,7 @@ into whatever you were typing in: email, chat, documents, code editors, browsers
 Everything happens on your own computer. No account, no subscription, no internet connection, no
 cloud. Your voice never leaves your PC.
 
-**[Get Ivy for Windows from the Microsoft Store](https://apps.microsoft.com/detail/9P420N80LXQJ)** (or [download the setup file](https://github.com/raj-7676/ivy-dictation/releases/latest))
+**[Get Ivy for Windows from the Microsoft Store](https://apps.microsoft.com/detail/9P420N80LXQJ)** (or [download the setup file](https://github.com/raj-7676/ivy-dictation/releases/latest), or run `winget install 9P420N80LXQJ`)
 
 Website: **[raj-7676.github.io/ivy-dictation](https://raj-7676.github.io/ivy-dictation/)**
 
@@ -41,7 +41,9 @@ It also drops fillers (um, uh), removes stutters and repeated words, adds punctu
 letters, and writes numbers, money, times and dates the way you'd type them.
 
 **One small model does all of it.** Ivy's speech model hears and cleans up in a single pass. There's
-no second AI rewriting your text afterwards, so it stays fast and keeps your words.
+no second AI rewriting your text afterwards, so it stays fast and keeps your words. Most offline
+dictation apps use a speech model that can only write down the words it heard. Ivy's model writes
+text the way a language model does, so it can turn "Tuesday, no wait, Thursday" into "Thursday".
 
 **Truly offline.** Ivy goes online only once: on first start it downloads its speech model from this
 repository's release (skip even that by [installing offline](#option-2-download-the-setup-file)). After that
@@ -83,6 +85,17 @@ paragraphs full of corrections.
 - **Uninstall asks first:** the uninstaller offers to delete all Ivy data from your PC.
 
 See [SECURITY.md](SECURITY.md) for the security details.
+
+## Good to know
+
+- **English only** for now.
+- **Speed depends on your PC.** With any graphics card a dictation is ready in well under a second. On an
+  older PC without one, it takes a few seconds.
+- **Mac:** coming later. **Linux:** works on X11; Wayland isn't tested yet ([details](#linux)).
+- Ivy downloads a 2.5 GB speech model once, on first start.
+
+Questions or ideas? Ask in [Discussions](https://github.com/raj-7676/ivy-dictation/discussions).
+Found a mistake in what Ivy typed? [Open an issue](https://github.com/raj-7676/ivy-dictation/issues).
 
 ---
 
@@ -213,3 +226,7 @@ condition; see [LICENSE](LICENSE).
 The speech model is Ivy's fine-tune of Qwen3-ASR-1.7B (Apache 2.0). The fine-tune follows the same rule as
 the app: free to use, not for sale ([LICENSES/IVY-MODEL-LICENSE.txt](LICENSES/IVY-MODEL-LICENSE.txt)).
 Credits for the model, libraries and data are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+---
+
+If Ivy saves you some typing, a ⭐ star helps other people find it.
