@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.2.9"
+version = "0.3.0"
 description = "Ivy - offline voice dictation"
 authors = ["Yashvanraj"]
 license-file = "../LICENSE"

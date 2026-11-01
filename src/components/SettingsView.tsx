@@ -527,7 +527,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 style={chipStyle}
               >
                 {(['gpu', 'cpu'] as HardwareMode[]).map((mode) => {
-                  const effectiveMode: HardwareMode = hardwareStatus.onBattery
+                  const effectiveMode: HardwareMode = hardwareStatus.onBattery || hardwareStatus.isEvicted
                     ? 'cpu'
                     : (settings.hardwareMode || 'gpu');
                   const active = effectiveMode === mode;
@@ -574,7 +574,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <div className="mt-3">
-              <ModeMatrix hardwareMode={hardwareStatus.onBattery ? 'cpu' : (settings.hardwareMode || 'gpu')} />
+              <ModeMatrix hardwareMode={hardwareStatus.onBattery || hardwareStatus.isEvicted ? 'cpu' : (settings.hardwareMode || 'gpu')} />
             </div>
 
             {/* Live GPU Telemetry pill (the load reading is Windows' own GPU counter; Linux shows the card only) */}
@@ -612,7 +612,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           {IS_WINDOWS && (
           <Row
             title="Smart GPU sharing (games, videos & 3D)"
-            description={`While a game or full-screen video player is in front, Ivy sleeps: model unloaded, Alt+Space left to the game. Full-screen browsers and terminals don't count. When other programs keep the GPU at ${settings.vramEvictionThreshold}% or more, Ivy switches to CPU (a short note shows on the overlay) and returns to the GPU when it calms down.`}
+            description={`When other programs keep the GPU at ${settings.vramEvictionThreshold}% or more, Ivy quietly unloads its model in the background (no pop-up) and uses CPU on your next ${keyLabel(settings.hotkey)}. It goes back to the GPU once the load has stayed low for a minute.`}
           >
             <button
               id="smart-vram-eviction-toggle"
@@ -648,9 +648,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               title="GPU usage limit"
               value={settings.vramEvictionThreshold}
               unit="%"
-              min={50}
+              min={10}
               max={100}
-              minLabel="50% (evict early)"
+              minLabel="10% (evict early)"
               maxLabel="100% (evict only when maxed out)"
               onChange={(v) => onUpdateSettings({ vramEvictionThreshold: v })}
             />
@@ -720,7 +720,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* Hardware Switch & Complete Restart Confirmation Popup */}
       {pendingModeSwitch && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
+        // No backdrop-blur: on the see-through glass window WebView2 blurred the transparent pixels into white streaks (2026-11-02).
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-200">
           <div
             className="w-full max-w-md p-6 rounded-3xl border border-white/[0.14] shadow-[0_30px_70px_-15px_rgba(0,0,0,0.95)]"
             style={{

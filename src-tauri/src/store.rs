@@ -115,6 +115,24 @@ pub fn open_store_page() {
     }
 }
 
+/// Opens the "Buy me a coffee" page in the default browser (Settings > Buy me a coffee). Only ever on a click.
+#[tauri::command]
+pub fn open_support_page() {
+    const URL: &str = "https://buymeacoffee.com/glow.co";
+    #[cfg(windows)]
+    unsafe {
+        use windows::core::{w, HSTRING, PCWSTR};
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        ShellExecuteW(HWND::default(), w!("open"), &HSTRING::from(URL), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+    }
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(URL).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(URL).spawn();
+}
+
 /// Lets the Settings page swap "Check for updates" for a note that the Store updates Ivy.
 #[tauri::command]
 pub fn is_store_app() -> bool {

@@ -16,9 +16,9 @@ export const IS_WINDOWS = !IS_MAC && !IS_LINUX;
  *  PC (2026-10-10): the launch intro at 50 fps with 34 ms frames, the drifting motes alone half a core. */
 export const SOFTWARE_PAINT = IS_LINUX;
 
-/** The content column of Dictionary, Tone and Settings. Linux: the window's full width, like Home and History; a
- *  centred column left most of a maximized window empty there (a tester's PC, 2026-10-11). */
-export const PAGE_COLUMN = IS_LINUX ? 'w-full' : 'max-w-2xl w-full mx-auto';
+/** The content column of Dictionary, Tone and Settings: the window's full width on every OS, like Home and History;
+ *  a centred 672 px column left most of a maximized window empty (Linux tester 2026-10-11, Yash on Windows 2026-11-01). */
+export const PAGE_COLUMN = 'w-full';
 
 /** "PC" or "Mac", as in "Your voice stays on your PC." */
 export const DEVICE = IS_MAC ? 'Mac' : 'PC';

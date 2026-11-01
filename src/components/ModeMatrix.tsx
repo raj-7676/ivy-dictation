@@ -17,7 +17,7 @@ const COMBOS: Record<HardwareMode, ModeCombo> = {
       'A 1-minute dictation is ready in about 2 seconds; a short one in a fraction of a second.',
       // GPU sharing (busy GPU, full-screen apps) reads Windows' own counters (gpu_monitor.rs); the battery rule is everywhere.
       IS_WINDOWS
-        ? 'On battery, or when other apps keep the GPU busy, Ivy switches to CPU by itself. During games and full-screen video it steps aside.'
+        ? 'On battery, or when games and other apps keep the GPU busy, Ivy quietly moves to CPU by itself, with no pop-up over your game.'
         : 'On battery, Ivy switches to CPU by itself.',
     ],
   },

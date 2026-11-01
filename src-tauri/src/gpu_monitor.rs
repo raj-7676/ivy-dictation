@@ -224,6 +224,8 @@ pub enum Event {
     Wake,
     /// Other programs pushed the GPU past the threshold: unload and dictate on CPU (load %, threshold %).
     GpuBusy(u32, u32),
+    /// The GPU has been quiet for a minute after `GpuBusy`: load the model back onto it.
+    GpuFree,
 }
 
 static SLEEPING: AtomicBool = AtomicBool::new(false);
@@ -267,13 +269,14 @@ where
                 let (mut high_samples, mut low_since): (u32, Option<Instant>) = (0, None);
                 let mut fullscreen_samples = 0u32;
                 loop {
-                    std::thread::sleep(Duration::from_secs(3));
+                    std::thread::sleep(Duration::from_secs(1));
                     let pct = load.as_ref().and_then(|l| l.others_percent(&luid, own_pid));
                     if let Some(p) = pct {
                         OTHERS_LOAD.store(p.round() as u32, Ordering::Relaxed);
                     }
                     let (enabled, threshold, gpu_mode) = settings();
-                    let full = enabled && fullscreen_app_in_front();
+                    // Full-screen sleep is off (Yash, 2026-11-01): only the GPU-limit slider decides, and a sleeping Ivy never evicted.
+                    let full = false;
                     fullscreen_samples = if full { fullscreen_samples + 1 } else { 0 };
                     if !is_sleeping() && fullscreen_samples >= 2 && on_event(Event::Sleep) {
                         log::info!("Ivy: a full-screen app is in front. Sleeping (model unloaded, hotkey off).");
@@ -290,18 +293,21 @@ where
                     let threshold = threshold as f64;
                     if !is_vram_evicted() {
                         high_samples = if pct >= threshold { high_samples + 1 } else { 0 };
-                        if high_samples >= 2 && on_event(Event::GpuBusy(pct.round() as u32, threshold as u32)) {
+                        if high_samples >= 2 && // 2 s at or above the limit
+                             on_event(Event::GpuBusy(pct.round() as u32, threshold as u32)) {
                             log::warn!("Ivy: other programs are using the GPU at {pct:.0}% (>= {threshold:.0}%). Dictating on CPU.");
                             IS_EVICTED.store(true, Ordering::Relaxed);
                             high_samples = 0;
                             low_since = None;
                         }
-                    } else if pct < threshold - 15.0 {
+                    } else if pct <= (threshold - 15.0).max(1.0) { // 1% floor: at a 10% limit "15 below" is negative and never came true
                         let since = *low_since.get_or_insert_with(Instant::now);
-                        if since.elapsed() >= Duration::from_secs(15) {
+                        // 60 s (Yash, 2026-11-02): a paused game or loading screen drops the load for seconds, not for good.
+                        if since.elapsed() >= Duration::from_secs(60) {
                             log::info!("Ivy: GPU load from other programs is down to {pct:.0}%. Using the GPU again.");
                             IS_EVICTED.store(false, Ordering::Relaxed);
                             low_since = None;
+                            on_event(Event::GpuFree); // during a dictation it's skipped; that one reloads itself
                         }
                     } else {
                         low_since = None;

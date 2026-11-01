@@ -2,6 +2,16 @@
 
 All notable changes to Ivy. Downloads are on the [Releases page](https://github.com/raj-7676/ivy-dictation/releases).
 
+## 0.3.0 (2026-11-02)
+
+- **Gaming-friendly GPU sharing.** When other programs keep the GPU above your limit, Ivy now steps aside silently: no overlay pops up over your game. The next time you press Alt+Space, Ivy shows "High GPU usage detected", loads on the CPU with a short countdown, and tells you when it's ready. It moves back to the GPU only after the load has stayed low for a full minute, so pausing a game doesn't bounce it back and forth.
+- **CPU mode really stays off the graphics card** on Windows too (it kept a large buffer there before).
+- **Buy me a coffee.** A "Buy me a coffee" link in the sidebar for anyone who wants to support Ivy. Ivy stays free, with no ads.
+- **Smarter Touch Up spell-check:** typo fixes follow how people actually mistype (swapped letters first), and common tech words (docker, nodejs, kubernetes …) are no longer "corrected".
+- Dictionary, Tone and Settings now use the full window width.
+- Fixed: a quick tap of the dictation key hid a notice (such as "Speech model still downloading") the moment you let go.
+- Fixed: white streaks behind the GPU/CPU switch and "Clear all" dialogs on the glass window.
+
 ## 0.2.9 (2026-10-18)
 
 - **Ivy is coming to the Microsoft Store.** The Store version installs in one step with the speech model included (no download on first start), shows no "Windows protected your PC" warning, and the Store keeps it updated. The download from this page stays too: both are the same Ivy, released on the same day.

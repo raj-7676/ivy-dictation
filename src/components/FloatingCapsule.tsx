@@ -414,9 +414,31 @@ export const FloatingCapsule: React.FC<FloatingCapsuleProps> = ({
               transition={{ duration: 0.2 }}
               className="flex-1 h-full pl-2.5 pr-3 flex items-center gap-2"
             >
-              <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0 bg-[#E59530]/20 border border-[#E59530]/50">
-                <AlertTriangle className="w-3 h-3 text-[#E59530]" />
-              </div>
+              {notice.startsWith('High GPU usage') ? (
+                // GPU-busy switch: a ring fills over the 3 s countdown while the model loads on CPU.
+                <svg className="w-5 h-5 shrink-0 -rotate-90" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="8.5" fill="none" stroke="#E59530" strokeOpacity="0.25" strokeWidth="1.5" />
+                  <motion.circle
+                    cx="10" cy="10" r="8.5" fill="none" stroke="#E59530" strokeWidth="1.5" strokeLinecap="round"
+                    initial={{ pathLength: 0 }}
+                    animate={{ pathLength: 1 }}
+                    transition={{ duration: 3, ease: 'linear' }}
+                  />
+                </svg>
+              ) : notice.startsWith('Ready') ? (
+                <motion.div
+                  initial={{ scale: 0.6, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ type: 'spring', stiffness: 420, damping: 26 }}
+                  className="w-5 h-5 rounded-full flex items-center justify-center shrink-0 bg-emerald-500/20 border border-emerald-400/50"
+                >
+                  <Check className="w-3 h-3 text-emerald-400" />
+                </motion.div>
+              ) : (
+                <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0 bg-[#E59530]/20 border border-[#E59530]/50">
+                  <AlertTriangle className="w-3 h-3 text-[#E59530]" />
+                </div>
+              )}
               <span className={`text-[11.5px] font-medium text-white ${MESSAGE_FIT}`}>{notice}</span>
             </motion.div>
           )}

@@ -553,7 +553,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ sessions, onDeleteSess
       {/* Clear-all confirmation — a real in-app modal matching the rest of
           Ivy's UI, not window.confirm()'s bare OS dialog */}
       {showClearConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-200">
           <div
             className="w-full max-w-md p-6 rounded-3xl border border-white/[0.14] shadow-[0_30px_70px_-15px_rgba(0,0,0,0.95)]"
             style={{ backgroundColor: 'rgba(16, 12, 20, 0.98)' }}

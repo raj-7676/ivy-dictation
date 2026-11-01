@@ -21,6 +21,10 @@ const KEEP: &str = "lakh lakhs crore crores rupees paise ji haan han nahi nahin 
     kirana mandi bazaar puja pooja diwali holi rakhi gmail whatsapp swiggy zomato paytm phonepe gpay upi emi gst \
     aadhaar ifsc neft rtgs imps otp kyc lol omg wfh fyi asap";
 
+/// Technical words the 80k list lacks or ranks low. They count as correct (so "nodejs" is never "fixed" to "nodes")
+/// and as fixes ("dokcer" -> "docker").
+const TECH: &str = "docker kubernetes kubectl postgres postgresql mysql sqlite mongodb redis nginx kafka graphql json yaml toml     html css http https api apis sdk cli ide github gitlab bitbucket npm yarn pnpm webpack vite react reactjs nodejs vue     angular svelte nextjs nuxt django flask fastapi pytorch tensorflow numpy pandas jupyter linux ubuntu debian macos     android ios iphone ipad chatgpt openai anthropic gemini llama qwen terraform ansible jenkins aws azure gcp firebase     supabase vercel netlify cloudflare localhost frontend backend devops microservice microservices middleware typescript     javascript python rust golang kotlin tailwind bootstrap eslint prettier webhook webhooks oauth jwt sql nosql regex     async boolean enum struct tauri electron vulkan cuda gpu cpu ram ssd usb wifi bluetooth hdmi repo repos config     configs dockerfile dataset datasets username usernames login logout signup unicode utf ascii bash zsh powershell     vscode intellij pycharm figma jira slack zoom notion linkedin youtube instagram reddit whatsapp telegram";
+
 fn dict() -> &'static HashMap<&'static str, u64> {
     static D: OnceLock<HashMap<&'static str, u64>> = OnceLock::new();
     D.get_or_init(|| {
@@ -30,6 +34,7 @@ fn dict() -> &'static HashMap<&'static str, u64> {
                 let mut p = l.split_whitespace();
                 Some((p.next()?, p.next()?.parse().ok()?))
             })
+            .chain(TECH.split_whitespace().map(|w| (w, 1_000_000_000u64)))
             .collect()
     })
 }
@@ -39,26 +44,32 @@ fn keep() -> &'static HashSet<&'static str> {
     K.get_or_init(|| KEEP.split_whitespace().collect())
 }
 
-/// Every string one edit (delete, swap of neighbours, replace, insert) away from `w`.
-fn edits1(w: &str) -> Vec<String> {
+/// The kinds of one-edit change, in the order a typist makes them: two letters swapped, a letter left out, a
+/// letter added, a letter wrong. The first kind that gives a common word wins, so "wnat" is "want" (a swap), not
+/// "what" (an added letter that happens to be more frequent), and "mising" is "missing", not "rising".
+fn edits1_by_kind(w: &str) -> [Vec<String>; 4] {
     let b = w.as_bytes();
-    let mut out = Vec::with_capacity(54 * b.len() + 25);
+    let (mut swap, mut missing, mut extra, mut wrong) = (vec![], vec![], vec![], vec![]);
     for i in 0..=b.len() {
         let (l, r) = (&b[..i], &b[i..]);
-        if !r.is_empty() {
-            out.push([l, &r[1..]].concat());
-        }
         if r.len() > 1 {
-            out.push([l, &[r[1], r[0]], &r[2..]].concat());
+            swap.push([l, &[r[1], r[0]], &r[2..]].concat());
+        }
+        if !r.is_empty() {
+            extra.push([l, &r[1..]].concat());
         }
         for c in b'a'..=b'z' {
+            missing.push([l, &[c], r].concat());
             if !r.is_empty() && r[0] != c {
-                out.push([l, &[c], &r[1..]].concat());
+                wrong.push([l, &[c], &r[1..]].concat());
             }
-            out.push([l, &[c], r].concat());
         }
     }
-    out.into_iter().map(|v| String::from_utf8(v).expect("ascii in, ascii out")).collect()
+    // The first letter is almost never the typo; a candidate that changes it is a different word.
+    let ok = |v: Vec<Vec<u8>>| -> Vec<String> {
+        v.into_iter().filter(|c| c.first() == b.first()).filter_map(|c| String::from_utf8(c).ok()).collect()
+    };
+    [ok(swap), ok(missing), ok(extra), ok(wrong)]
 }
 
 fn most_common<'a>(cands: impl Iterator<Item = &'a String>) -> Option<String> {
@@ -70,30 +81,63 @@ fn most_common<'a>(cands: impl Iterator<Item = &'a String>) -> Option<String> {
         .map(|(c, _)| c.clone())
 }
 
-/// The fix for one word, or None to leave it exactly as it is.
-pub fn fix_word(w: &str) -> Option<String> {
+/// The fix for one lowercase word, or None to leave it exactly as it is. `allow_two`: also try two edits (6+ letters).
+fn fix_lower(w: &str, allow_two: bool) -> Option<String> {
     if w.len() < 3 || !w.bytes().all(|b| b.is_ascii_lowercase()) || dict().contains_key(w) || keep().contains(w) {
         return None;
     }
-    let e1 = edits1(w);
-    if let Some(c) = most_common(e1.iter()) {
-        return Some(c);
+    let kinds = edits1_by_kind(w);
+    // A short word with a letter left out or a wrong letter has too many neighbours ("dgo" -> "do", "mny" -> "may").
+    for (i, k) in kinds.iter().enumerate() {
+        if i >= 2 && w.len() < 5 {
+            continue;
+        }
+        if let Some(c) = most_common(k.iter()) {
+            return Some(c);
+        }
     }
-    if w.len() < 6 {
+    if !allow_two || w.len() < 6 {
         return None;
     }
-    let e2: Vec<String> = e1.iter().flat_map(|e| edits1(e)).collect();
+    let e2: Vec<String> = kinds.iter().flatten().flat_map(|e| edits1_by_kind(e).into_iter().flatten().collect::<Vec<_>>()).collect();
     most_common(e2.iter())
+}
+
+/// The fix for one word, or None to leave it exactly as it is.
+pub fn fix_word(w: &str) -> Option<String> {
+    fix_lower(w, true)
 }
 
 /// Spell-fixes `text`, keeping every space, line break and punctuation mark where it was.
 pub fn touch_up(text: &str) -> String {
+    touch_up_with(text, &[])
+}
+
+/// Same, and never touches a word from `extra_keep` (the user's personal dictionary).
+pub fn touch_up_with(text: &str, extra_keep: &[String]) -> String {
+    let extra: HashSet<String> = extra_keep.iter().flat_map(|w| w.split_whitespace()).map(|w| w.to_lowercase()).collect();
     crate::rulebooks::per_line(text, |line| {
+        let mut sentence_start = true;
         line.split(' ')
             .map(|tok| {
                 let (l, core, r) = crate::rulebooks::split3(tok);
-                match fix_word(core) {
-                    Some(fixed) => format!("{l}{fixed}{r}"),
+                let lower = core.to_lowercase();
+                let fixed = if extra.contains(&lower) {
+                    None
+                } else if core == lower {
+                    fix_lower(core, true)
+                } else if sentence_start && core.len() >= 3 && core.is_ascii() && core[1..] == lower[1..] {
+                    // "Recieve the..." at the start of a sentence. One edit only: a capitalised word anywhere else
+                    // (or a name) is left alone.
+                    fix_lower(&lower, false).map(|f| crate::rulebooks::cap_first(&f))
+                } else {
+                    None
+                };
+                if !core.is_empty() {
+                    sentence_start = r.contains(['.', '!', '?']);
+                }
+                match fixed {
+                    Some(f) => format!("{l}{f}{r}"),
                     None => tok.to_string(),
                 }
             })
@@ -131,5 +175,24 @@ mod tests {
     fn idempotent() {
         let once = touch_up("recieve teh seperate wierd things");
         assert_eq!(touch_up(&once), once);
+    }
+
+    #[test]
+    fn tech_words_survive_and_get_fixed() {
+        assert_eq!(touch_up("we use reactjs and nodejs with docker"), "we use reactjs and nodejs with docker");
+        assert_eq!(touch_up("dokcer and kuberentes and postgress"), "docker and kubernetes and postgres");
+    }
+
+    #[test]
+    fn picks_the_typists_fix() {
+        assert_eq!(touch_up("I wnat the mising file"), "I want the missing file");
+        assert_eq!(touch_up("Recieve it. Teh end."), "Receive it. The end.");
+    }
+
+    #[test]
+    fn names_and_personal_dictionary_stay() {
+        let keep = "Priya said Ankit and Kavitha met Rohan, Meera and Suresh. Anirudh agreed. Raj and Ali, Ravi too. Ron left.";
+        assert_eq!(touch_up(keep), keep);
+        assert_eq!(touch_up_with("the kubeflo job", &["kubeflo".to_string()]), "the kubeflo job");
     }
 }

@@ -1477,8 +1477,8 @@ fn validate_settings(s: &SettingsConfig) -> Result<(), String> {
     if !(0.0..=100.0).contains(&s.glass_blur) {
         return Err("glass blur must be between 0.0 and 100.0".into());
     }
-    if !(50..=100).contains(&s.vram_eviction_threshold) {
-        return Err("vram eviction threshold must be between 50 and 100".into());
+    if !(10..=100).contains(&s.vram_eviction_threshold) {
+        return Err("vram eviction threshold must be between 10 and 100".into());
     }
     if s.selected_mic.len() > 256 {
         return Err("selected microphone identifier too long".into());
@@ -2739,7 +2739,7 @@ fn touch_up_transcript(app: tauri::AppHandle, id: String) -> Result<bool, String
     if raw.trim().is_empty() {
         return Err("no transcript to touch up".into());
     }
-    let corrected = spellcheck::touch_up(&raw);
+    let corrected = spellcheck::touch_up_with(&raw, &load_settings(&app).personal_dictionary);
     if corrected == raw {
         return Ok(false); // no typos: leave the pasted text alone
     }
@@ -3631,6 +3631,9 @@ fn prewarm(app: &tauri::AppHandle) {
     });
 }
 
+/// Set by the silent GPU-busy unload; the next hotkey press shows "High GPU usage detected" once.
+static GPU_EVICT_NOTE_PENDING: AtomicBool = AtomicBool::new(false);
+
 fn handle_hotkey_down(app: &tauri::AppHandle) {
     // No model yet (first start, still downloading): say so instead of recording audio nobody can transcribe.
     if !model::is_ready() {
@@ -3649,6 +3652,16 @@ fn handle_hotkey_down(app: &tauri::AppHandle) {
             bridge_capsule_show(app, true);
             let _ = app.emit("ivy://notice", notice);
         }
+        return;
+    }
+    // First press after a silent GPU-busy unload (Yash, 2026-11-02): no recording. The capsule says "High GPU usage
+    // detected", counts 3-2-1 while the model loads on CPU, then asks for Alt+Space again.
+    if gpu_monitor::is_vram_evicted() && !WIZARD_ACTIVE.load(Ordering::SeqCst) && GPU_EVICT_NOTE_PENDING.swap(false, Ordering::SeqCst) {
+        debug_log(app, "first hotkey after GPU-busy unload: loading the model on CPU, no recording this press");
+        position_capsule_window(app);
+        bridge_capsule_show(app, true);
+        let _ = app.emit("ivy://gpu-evicted", ());
+        prewarm(app);
         return;
     }
     // Real TOCTOU otherwise: this function is reachable concurrently from
@@ -4053,6 +4066,12 @@ fn route_dictation_release(app: &tauri::AppHandle) {
         handle_hotkey_up(app);
         debug_log(app, &format!("handle_hotkey_up returned after {:?}", t.elapsed()));
     } else {
+        // Nothing recording (the press only showed a notice: GPU-busy countdown, model still downloading): cancelling
+        // here hid that notice the moment the key came up (live test, 2026-11-02). Leave it on screen.
+        if PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+            debug_log(app, "quick tap with nothing recording — notice stays");
+            return;
+        }
         cancel_dictation_internal(app, "quick tap released — held for a possible double-press");
         *LAST_TAP.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     }
@@ -4573,6 +4592,7 @@ pub fn run() {
             update::install_update,
             store::is_store_app,
             store::open_store_page,
+            store::open_support_page,
             get_permissions,
             request_permission,
             get_desktop,
@@ -4799,10 +4819,16 @@ pub fn run() {
                         }
                         gpu_monitor::Event::GpuBusy(load, threshold) if !busy => {
                             lite::unload_engine();
-                            debug_log(&notice_app, &format!("GPU busy ({load}% >= {threshold}%): model unloaded, dictating on CPU"));
-                            position_capsule_window(&notice_app);
-                            bridge_capsule_show(&notice_app, true);
-                            let _ = notice_app.emit("ivy://gpu-evicted", serde_json::json!({ "load": load, "threshold": threshold }));
+                            // Silent (Yash, 2026-11-02): an overlay popping up mid-game froze the game, twice. The note
+                            // shows on the next Alt+Space instead (handle_hotkey_down).
+                            GPU_EVICT_NOTE_PENDING.store(true, Ordering::SeqCst);
+                            debug_log(&notice_app, &format!("GPU busy ({load}% >= {threshold}%): model unloaded silently, CPU on next dictation"));
+                        }
+                        gpu_monitor::Event::GpuFree if !busy => {
+                            // A countdown that was never used is moot once the GPU is back.
+                            GPU_EVICT_NOTE_PENDING.store(false, Ordering::SeqCst);
+                            debug_log(&notice_app, "GPU quiet for 60 s: loading the model back onto the GPU");
+                            prewarm(&notice_app);
                         }
                         _ => return false,
                     }

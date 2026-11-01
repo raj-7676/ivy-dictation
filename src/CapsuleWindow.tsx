@@ -20,6 +20,7 @@ export default function CapsuleWindow() {
   // found" message — fetched once since the capsule window has no other
   // reason to hold live settings, and the hotkey rarely changes mid-session.
   const [manualPasteHotkey, setManualPasteHotkey] = useState<string>(keyLabel('Alt + V'));
+  const dictationKey = useRef(keyLabel('Alt + Space'));
   const [touchUpStatus, setTouchUpStatus] = useState<'offer' | 'loading' | 'done' | 'clean' | 'error'>('offer');
   const idleTimer = useRef<number | undefined>(undefined);
   const [notice, setNotice] = useState('');
@@ -40,6 +41,7 @@ export default function CapsuleWindow() {
       Promise.all([invoke<SettingsConfig>('get_settings'), invoke<Desktop>('get_desktop')])
         .then(([s, desktop]) => {
           setManualPasteHotkey(desktop.wayland ? '' : keyLabel(s.manualPasteHotkey));
+          dictationKey.current = keyLabel(s.hotkey);
         })
         .catch(() => {});
     };
@@ -90,11 +92,19 @@ export default function CapsuleWindow() {
     // Fires once, 90s after a real autostart launch — see `setup()` in
     // lib.rs. Never on a manual launch or the first-ever run.
     // Smart eviction moved dictation to CPU because other programs were loading the GPU (gpu_monitor.rs).
-    const unlistenGpuEvicted = listen<{ load: number; threshold: number }>('ivy://gpu-evicted', (e) => {
+    // First Alt+Space after the silent switch (nothing records on it): 3-2-1 while the model loads on CPU, then
+    // "Ready · press Alt+Space to dictate".
+    const unlistenGpuEvicted = listen('ivy://gpu-evicted', () => {
       clearTimeout(idleTimer.current);
-      setNotice(`GPU above your ${e.payload.threshold}% limit · Ivy switched to CPU`);
       setMode('notice');
-      idleTimer.current = window.setTimeout(goIdle, 3500);
+      const key = dictationKey.current;
+      [3, 2, 1].forEach((n, i) =>
+        window.setTimeout(() => {
+          setNotice(`High GPU usage detected · switching to CPU · ${n}`);
+        }, i * 1000)
+      );
+      window.setTimeout(() => setNotice(`Ready · press ${key} to dictate`), 3000);
+      idleTimer.current = window.setTimeout(goIdle, 6000);
     });
     // The hotkey was pressed before the speech model was in place (lib.rs handle_hotkey_down).
     const unlistenNotice = listen<string>('ivy://notice', (e) => {

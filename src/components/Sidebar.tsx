@@ -1,5 +1,6 @@
 import React from 'react';
-import { Clock, Settings, ShieldCheck, Home, BookMarked, Type } from 'lucide-react';
+import { Clock, Settings, ShieldCheck, Home, BookMarked, Type, Coffee } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { ScreenState } from '../types';
 import { IvyWordmark } from './IvyWordmark';
 
@@ -94,6 +95,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           );
         })}
+        <button
+          id="nav-coffee"
+          onClick={() => void invoke('open_support_page')}
+          style={{ border: '1px solid transparent' }}
+          className="w-full flex items-center px-3 py-2.5 rounded-2xl text-[13px] text-left text-white/50 hover:text-white/85 hover:bg-white/[0.05] transition-colors duration-150"
+        >
+          <span className="flex items-center gap-2.5">
+            <Coffee className="w-4 h-4 stroke-[1.75]" style={{ color: `rgb(${ACCENT_RGB})` }} />
+            <span>Buy me a coffee</span>
+          </span>
+        </button>
       </nav>
     </div>
 
