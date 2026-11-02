@@ -228,6 +228,10 @@ The speech model is Ivy's fine-tune of Qwen3-ASR-1.7B (Apache 2.0). The fine-tun
 the app: free to use, not for sale ([LICENSES/IVY-MODEL-LICENSE.txt](LICENSES/IVY-MODEL-LICENSE.txt)).
 Credits for the model, libraries and data are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+**Name and logo.** The code is open, but "Ivy", "Ivy Dictation" and the Ivy logo belong to Glow.co. A changed
+copy must have its own name and its own icon. Official Ivy comes only from the Microsoft Store, the website and
+the Releases page of this repository. See [TRADEMARK.md](TRADEMARK.md).
+
 ---
 
 If Ivy saves you some typing, a ⭐ star helps other people find it.
