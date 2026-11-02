@@ -24,6 +24,11 @@ export default function CapsuleWindow() {
   const [touchUpStatus, setTouchUpStatus] = useState<'offer' | 'loading' | 'done' | 'clean' | 'error'>('offer');
   const idleTimer = useRef<number | undefined>(undefined);
   const [notice, setNotice] = useState('');
+  const [handsFree, setHandsFree] = useState(false);
+  // The newest dictation, and whether it's still recording. An earlier dictation can finish while a newer one records
+  // (a hold, then a quick double-tap): its result took over the capsule and then hid it mid-recording (Yash, 2026-11-02).
+  const latestDictation = useRef(0);
+  const recording = useRef(false);
 
   // A real OS-level hide, not just rendering nothing — WebView2 can leave a
   // faint rectangular background/shadow visible even over fully transparent
@@ -63,21 +68,35 @@ export default function CapsuleWindow() {
   }, []);
 
   useEffect(() => {
-    const unlistenDown = listen<{ activeApp: string; tonePreset: TonePreset }>(
+    const unlistenDown = listen<{ activeApp: string; tonePreset: TonePreset; dictationId: number }>(
       'ivy://hotkey-down',
       (e) => {
         clearTimeout(idleTimer.current);
+        latestDictation.current = e.payload.dictationId;
+        recording.current = true;
         setActiveApp(e.payload.activeApp);
         setActiveTone(e.payload.tonePreset);
         setSessionId('');
+        setHandsFree(false);
         setMode('recording');
         audioFeedback.playStartBeep();
       }
     );
+    // A double-tap locked the recording on (lib.rs route_dictation_press): say so, with a double pop.
+    const unlistenHandsFree = listen('ivy://hands-free', () => {
+      setHandsFree(true);
+      audioFeedback.playStartBeep();
+      window.setTimeout(() => audioFeedback.playStartBeep(), 120);
+    });
     const unlistenUp = listen('ivy://hotkey-up', () => {
+      recording.current = false;
       setMode('transcribing');
     });
+    const unlistenCancelled = listen('ivy://dictation-cancelled', () => {
+      recording.current = false;
+    });
     const unlistenManualPaste = listen<boolean | { pasted: boolean; activeApp?: string }>('ivy://manual-paste', (e) => {
+      if (recording.current) return; // Alt + V while recording: it still pastes, the capsule stays on the recording
       clearTimeout(idleTimer.current);
       setMode('manual-pasted');
       if (typeof e.payload === 'object' && e.payload !== null) {
@@ -114,11 +133,13 @@ export default function CapsuleWindow() {
       idleTimer.current = window.setTimeout(goIdle, 3500);
     });
     const unlistenBackgroundReady = listen('ivy://background-ready', () => {
+      if (recording.current) return;
       clearTimeout(idleTimer.current);
       setMode('launched');
       idleTimer.current = window.setTimeout(goIdle, 3200);
     });
     const unlistenComplete = listen<{
+      dictationId: number;
       success: boolean;
       activeApp: string;
       sessionId: string;
@@ -126,6 +147,9 @@ export default function CapsuleWindow() {
       /** False after a paste on Linux's Wayland into an app Ivy can't see: Touch Up couldn't check it's still there. */
       touchUp: boolean;
     }>('ivy://dictation-complete', (e) => {
+      // An earlier dictation (it still pastes), or a microphone that never opened (its notice follows).
+      if (e.payload.dictationId !== latestDictation.current) return;
+      clearTimeout(idleTimer.current);
       setActiveApp(e.payload.activeApp);
       setSessionId(e.payload.sessionId);
       setPasted(e.payload.pasted);
@@ -155,7 +179,9 @@ export default function CapsuleWindow() {
     });
     return () => {
       unlistenDown.then((f) => f());
+      unlistenHandsFree.then((f) => f());
       unlistenUp.then((f) => f());
+      unlistenCancelled.then((f) => f());
       unlistenManualPaste.then((f) => f());
       unlistenBackgroundReady.then((f) => f());
       unlistenGpuEvicted.then((f) => f());
@@ -183,6 +209,7 @@ export default function CapsuleWindow() {
   };
 
   const cancel = () => {
+    recording.current = false;
     clearTimeout(idleTimer.current);
     setMode('idle');
     void invoke('cancel_dictation');
@@ -210,6 +237,7 @@ export default function CapsuleWindow() {
       mode={mode}
       activeTone={activeTone}
       activeApp={activeApp}
+      handsFreeKey={handsFree && mode === 'recording' ? dictationKey.current : undefined}
       pasted={pasted}
       manualPasteHotkey={manualPasteHotkey}
       canRetry={!!sessionId}

@@ -12,6 +12,8 @@ interface FloatingCapsuleProps {
   mode: CapsuleMode;
   activeTone: TonePreset;
   activeApp: string;
+  /** Set while a double-tap has locked the recording on: the key that finishes it. */
+  handsFreeKey?: string;
   /** Real Ctrl+V happened vs. clipboard-only fallback — never claim "Pasted"
    *  when this is false (Yash: no gimmicks, don't claim what didn't happen). */
   pasted?: boolean;
@@ -53,6 +55,7 @@ export const FloatingCapsule: React.FC<FloatingCapsuleProps> = ({
   mode,
   activeTone,
   activeApp,
+  handsFreeKey,
   pasted = true,
   canRetry,
   manualPasteHotkey,
@@ -225,7 +228,11 @@ export const FloatingCapsule: React.FC<FloatingCapsuleProps> = ({
                       </span>
                     )}
                   </span>
-                  <span className="text-[9px] text-white/50 font-mono mt-0.5 truncate">{activeApp}</span>
+                  {handsFreeKey ? (
+                    <span className="text-[9px] text-[#E59530] font-medium mt-0.5 truncate">Hands-free · {handsFreeKey} to finish</span>
+                  ) : (
+                    <span className="text-[9px] text-white/50 font-mono mt-0.5 truncate">{activeApp}</span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">

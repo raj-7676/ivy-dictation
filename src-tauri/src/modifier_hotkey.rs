@@ -5,7 +5,7 @@
 //! held cancels the dictation instead of finishing it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const SPEC: &str = "Ctrl + Shift";
 
@@ -26,8 +26,8 @@ pub enum Key {
 }
 
 /// Turns the Ctrl + Shift key on or off. The watcher starts the first time it's turned on; `on_key` runs on
-/// the watcher thread.
-pub fn set_enabled<F: Fn(Key) + Send + 'static>(on: bool, on_key: F) {
+/// the watcher thread, with when it happened (a press: when both keys went down, not when the settle time ended).
+pub fn set_enabled<F: Fn(Key, Instant) + Send + 'static>(on: bool, on_key: F) {
     ENABLED.store(on, Ordering::SeqCst);
     if on && !STARTED.swap(true, Ordering::SeqCst) {
         let _ = std::thread::Builder::new()
@@ -74,7 +74,7 @@ fn read_keyboard() -> Keys {
 
 /// The watcher loop. Returns only when `read` panics (tests); keyboard and switch are passed in so the
 /// rules can be tested without a keyboard.
-fn watch(on_key: &dyn Fn(Key), read: &dyn Fn() -> Keys, enabled: &dyn Fn() -> bool) {
+fn watch(on_key: &dyn Fn(Key, Instant), read: &dyn Fn() -> Keys, enabled: &dyn Fn() -> bool) {
     let mut spoiled = false; // another key joined in: ignore until both are let go
     loop {
         std::thread::sleep(TICK);
@@ -93,6 +93,7 @@ fn watch(on_key: &dyn Fn(Key), read: &dyn Fn() -> Keys, enabled: &dyn Fn() -> bo
             continue;
         }
         // Both down: settle, then record until either is let go.
+        let down_at = Instant::now();
         let mut released = false;
         for _ in 0..SETTLE_TICKS {
             std::thread::sleep(TICK);
@@ -109,21 +110,21 @@ fn watch(on_key: &dyn Fn(Key), read: &dyn Fn() -> Keys, enabled: &dyn Fn() -> bo
         if spoiled {
             continue;
         }
-        on_key(Key::Press);
+        on_key(Key::Press, down_at);
         if released {
-            on_key(Key::Release);
+            on_key(Key::Release, Instant::now());
             continue;
         }
         loop {
             std::thread::sleep(TICK);
             let k = read();
             if k.other && k.ctrl && k.shift {
-                on_key(Key::Cancel);
+                on_key(Key::Cancel, Instant::now());
                 spoiled = true;
                 break;
             }
             if !(k.ctrl && k.shift) || !enabled() {
-                on_key(Key::Release);
+                on_key(Key::Release, Instant::now());
                 break;
             }
         }
@@ -148,7 +149,7 @@ mod tests {
                 assert!(*i <= ticks.len(), "script finished"); // ends the endless loop
                 ticks[*i - 1]
             };
-            watch(&|key| s.lock().unwrap().push(key), &read, &|| true);
+            watch(&|key, _| s.lock().unwrap().push(key), &read, &|| true);
         })
         .join();
         let out = seen.lock().unwrap().clone();

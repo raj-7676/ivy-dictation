@@ -166,14 +166,27 @@ static CURRENT_PRESS_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 // press within `DOUBLE_PRESS_WINDOW_MS` confirms a double-press. Cleared
 // once consumed; a stale, never-followed-up tap is simply overwritten by
 // whatever press comes next, no separate expiry needed.
-static LAST_TAP: Mutex<Option<Instant>> = Mutex::new(None);
+// The tap's number rides along so the expiry timer (route_dictation_release) only discards its own tap.
+static LAST_TAP: Mutex<Option<(Instant, u64)>> = Mutex::new(None);
+static TAP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// The press that armed hands-free: if it turns out to be held (a tap, then a deliberate hold), its release
+// finishes the dictation like any hold instead of latching.
+static ARMING_PRESS: Mutex<Option<Instant>> = Mutex::new(None);
+// When hands-free started. A press within `RIGHT_AFTER_ARMING_MS` of it isn't "stop": a stray tap, then a fast
+// double-tap less than a second later, armed hands-free on the double's first tap and stopped it on its second
+// (Yash, 2026-11-02). Nobody finishes a dictation half a second after starting it.
+static ARMED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+const RIGHT_AFTER_ARMING_MS: u64 = 500;
 // A release sooner than this was a tap, not a deliberate hold — real
 // speech essentially never finishes in under 400ms, so nothing genuine is
 // lost by treating anything shorter as a possible double-press half.
 // Widened 2026-10-06 from 300/400 ms on Yash's real timings: a 312 ms tap counted as a hold, and
 // a two-key chord (Alt+Space) is slower to repeat than a mouse double-click (Windows default 500 ms).
 const TAP_THRESHOLD_MS: u64 = 400;
-const DOUBLE_PRESS_WINDOW_MS: u64 = 600;
+// 1000 ms (Yash, 2026-11-02): his real Alt+Space double-taps landed 600-1000 ms apart and were read as two single
+// taps. The first tap keeps recording through this window, so a longer window costs nothing but a longer-lived
+// overlay after a stray single tap.
+const DOUBLE_PRESS_WINDOW_MS: u64 = 1000;
 
 // The window Ivy's last real paste went into — set only when `paste_text`
 // sent a genuine Ctrl+V into a real foreground window. Touch Up uses it to
@@ -466,6 +479,8 @@ struct HotkeyDown {
     #[serde(flatten)]
     context: ActiveContext,
     for_wizard: bool,
+    /// Matches `DictationComplete::dictation_id`: the capsule shows only the newest dictation's result.
+    dictation_id: u64,
 }
 
 // All of Ivy's data lives in Local AppData (%LOCALAPPDATA%\app.ivy.dictation), never Roaming: a company PC
@@ -787,13 +802,14 @@ fn debug_log(app: &tauri::AppHandle, line: &str) {
     if fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > DEBUG_LOG_CAP_BYTES {
         let _ = fs::remove_file(&path);
     }
-    let ts = std::time::SystemTime::now()
+    // Milliseconds: key timing bugs (double-taps) need them.
+    let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis())
         .unwrap_or(0);
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
         use std::io::Write;
-        let _ = writeln!(f, "[{ts}] {line}");
+        let _ = writeln!(f, "[{}.{:03}] {line}", ms / 1000, ms % 1000);
     }
 }
 
@@ -1665,6 +1681,9 @@ fn persist_and_paste(app: &tauri::AppHandle, session: DictationSession, target_h
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct DictationComplete {
+    /// Which dictation finished. An earlier one can finish while a newer one is already recording (a hold, then a
+    /// quick double-tap): its result must not take over (and then hide) the newer one's capsule (Yash, 2026-11-02).
+    dictation_id: u64,
     success: bool,
     // "" for the ordinary "no speech heard" case; "mic_error" specifically
     // when the microphone itself never opened, so the UI can tell the user
@@ -2431,7 +2450,7 @@ fn run_dictation_pipeline(
         audio::zeroize_samples(&mut samples);
         let _ = app.emit(
             "ivy://dictation-complete",
-            DictationComplete { success: false, reason: String::new(), active_app, session_id: String::new(), pasted: false, touch_up: false, text: String::new() },
+            DictationComplete { dictation_id, success: false, reason: String::new(), active_app, session_id: String::new(), pasted: false, touch_up: false, text: String::new() },
         );
         return;
     }
@@ -2458,7 +2477,7 @@ fn run_dictation_pipeline(
         audio::zeroize_samples(&mut samples);
         let _ = app.emit(
             "ivy://dictation-complete",
-            DictationComplete { success: false, reason: String::new(), active_app, session_id: String::new(), pasted: false, touch_up: false, text: String::new() },
+            DictationComplete { dictation_id, success: false, reason: String::new(), active_app, session_id: String::new(), pasted: false, touch_up: false, text: String::new() },
         );
         return;
     };
@@ -2468,7 +2487,7 @@ fn run_dictation_pipeline(
         debug_log(&app, "wizard practice dictation: result sent to the wizard only (not pasted, not saved)");
         let _ = app.emit(
             "ivy://dictation-complete",
-            DictationComplete { success: !text.is_empty(), reason: String::new(), active_app, session_id: String::new(), pasted: false, touch_up: false, text },
+            DictationComplete { dictation_id, success: !text.is_empty(), reason: String::new(), active_app, session_id: String::new(), pasted: false, touch_up: false, text },
         );
         return;
     }
@@ -2505,6 +2524,7 @@ fn run_dictation_pipeline(
         let _ = app.emit(
             "ivy://dictation-complete",
             DictationComplete {
+                dictation_id,
                 success: false,
                 reason: String::new(),
                 active_app,
@@ -2549,7 +2569,7 @@ fn run_dictation_pipeline(
     let touch_up = pasted;
     let _ = app.emit(
         "ivy://dictation-complete",
-        DictationComplete { success: true, reason: String::new(), active_app, session_id: id, pasted, touch_up, text },
+        DictationComplete { dictation_id, success: true, reason: String::new(), active_app, session_id: id, pasted, touch_up, text },
     );
     // After the result, so the capsule ends on the reason rather than on "press Option + V" (which can't paste
     // without the permission either).
@@ -3092,6 +3112,101 @@ fn suppress_alt_menu() {
 
 #[cfg(not(windows))]
 fn suppress_alt_menu() {}
+
+/// Windows: global-hotkey notices a release by checking the key only every 50 ms. An instant double tap (second
+/// press within ~30 ms of letting go, Alt still held) then looked like one long tap, and the recording was dropped
+/// (Yash, 2026-11-02; reproduced 3 in 15). Ivy checks the key itself every 5 ms instead.
+#[cfg(windows)]
+static SHORTCUT_DOWN: AtomicBool = AtomicBool::new(false);
+
+#[cfg(windows)]
+fn key_down(vk: i32) -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetAsyncKeyState(vKey: i32) -> i16;
+    }
+    unsafe { GetAsyncKeyState(vk) as u16 & 0x8000 != 0 }
+}
+
+/// Windows: after a quick tap, Ivy watches the keys itself for the double-press window and is the only one to take
+/// the next press. Fast fingers often land the second Space a moment before Alt; Windows then sends no hotkey at all,
+/// so the second tap was lost and the recording dropped (Yash, 2026-11-02; reproduced 5 in 5). Here the main key and
+/// every modifier down, in any order, is the next press. Only inside the window: outside it, Space then Alt (in a
+/// game, say) must not start a dictation. Holds the running watch's number, 0 when none.
+#[cfg(windows)]
+static SECOND_TAP_WATCH: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static WATCH_SEQ: AtomicU64 = AtomicU64::new(0);
+/// When the key watch took a press: that press's own hotkey message, if Windows sends one late, is not a new press.
+#[cfg(windows)]
+static WATCHED_PRESS_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Runs from a press of the dictation key (`vk` + `mods`, pressed at `down_at`) until its release, then, after a
+/// quick tap, through the double-press window.
+#[cfg(windows)]
+fn watch_shortcut_release(app: &tauri::AppHandle, vk: i32, mods: Modifiers, down_at: Instant) {
+    let all_down = move || {
+        key_down(vk)
+            && (!mods.contains(Modifiers::ALT) || key_down(0x12))
+            && (!mods.contains(Modifiers::CONTROL) || key_down(0x11))
+            && (!mods.contains(Modifiers::SHIFT) || key_down(0x10))
+            && (!mods.contains(Modifiers::SUPER) || key_down(0x5B) || key_down(0x5C))
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let tick = std::time::Duration::from_millis(5);
+        while key_down(vk) {
+            std::thread::sleep(tick);
+        }
+        let up_at = Instant::now();
+        SHORTCUT_DOWN.store(false, Ordering::SeqCst);
+        queue_dictation_key(&app, modifier_hotkey::Key::Release, up_at);
+        if up_at - down_at >= std::time::Duration::from_millis(TAP_THRESHOLD_MS) {
+            return; // a hold: no double-press window
+        }
+        let id = WATCH_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+        SECOND_TAP_WATCH.store(id, Ordering::SeqCst);
+        let until = up_at + std::time::Duration::from_millis(DOUBLE_PRESS_WINDOW_MS);
+        while Instant::now() < until {
+            if all_down() {
+                if !SHORTCUT_DOWN.swap(true, Ordering::SeqCst) {
+                    let now = Instant::now();
+                    *WATCHED_PRESS_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(now);
+                    suppress_alt_menu();
+                    queue_dictation_key(&app, modifier_hotkey::Key::Press, now);
+                    watch_shortcut_release(&app, vk, mods, now);
+                }
+                break;
+            }
+            std::thread::sleep(tick);
+        }
+        let _ = SECOND_TAP_WATCH.compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst);
+    });
+}
+
+/// Virtual-key code of a dictation hotkey's main key (every key `parse_hotkey` can produce).
+#[cfg(windows)]
+fn shortcut_vk(code: Code) -> Option<i32> {
+    let name = format!("{code:?}");
+    Some(match name.as_str() {
+        "Space" => 0x20,
+        "AltLeft" => 0xA4,
+        "AltRight" => 0xA5,
+        "CapsLock" => 0x14,
+        "Enter" => 0x0D,
+        "Escape" => 0x1B,
+        "Tab" => 0x09,
+        "Backspace" => 0x08,
+        "ArrowLeft" => 0x25,
+        "ArrowUp" => 0x26,
+        "ArrowRight" => 0x27,
+        "ArrowDown" => 0x28,
+        n if n.len() == 4 && n.starts_with("Key") => n.as_bytes()[3] as i32, // KeyA..KeyZ = 'A'..'Z'
+        n if n.len() == 6 && n.starts_with("Digit") => n.as_bytes()[5] as i32, // Digit0..9 = '0'..'9'
+        n if n.starts_with('F') => 0x6F + n[1..].parse::<i32>().ok().filter(|f| (1..=12).contains(f))?,
+        _ => return None,
+    })
+}
 
 /// Returns whether a real Ctrl+V was actually sent — `false` means it only
 /// landed on the clipboard (no matching foreground window to paste into),
@@ -3679,7 +3794,7 @@ fn handle_hotkey_down(app: &tauri::AppHandle) {
     // (the same `check_rate_limit` used elsewhere for IPC endpoints) — real
     // bug, caught by Yash's own live testing: a deliberate fast double-tap
     // (the double-press-to-toggle gesture this app explicitly supports up
-    // to `DOUBLE_PRESS_WINDOW_MS` = 600ms apart) can easily land its second
+    // to `DOUBLE_PRESS_WINDOW_MS` apart) can easily land its second
     // press within 150ms of the first, silently hitting this now-removed
     // gate with zero `debug_log` trace — "Alt+Space sometimes just does
     // nothing," completely undiagnosable from the log. The compare-exchange
@@ -3740,6 +3855,7 @@ fn handle_hotkey_down(app: &tauri::AppHandle) {
             let _ = app.emit(
                 "ivy://dictation-complete",
                 DictationComplete {
+                    dictation_id: id,
                     success: false,
                     reason: if blocked { "mic_blocked" } else { "mic_error" }.to_string(),
                     active_app: ctx.active_app.clone(),
@@ -3774,7 +3890,7 @@ fn handle_hotkey_down(app: &tauri::AppHandle) {
     }
     position_capsule_window(app);
     bridge_capsule_show(app, true);
-    let _ = app.emit("ivy://hotkey-down", HotkeyDown { context: ctx, for_wizard });
+    let _ = app.emit("ivy://hotkey-down", HotkeyDown { context: ctx, for_wizard, dictation_id: id });
 
     // Real input level from the one stream Ivy already has open, so UI
     // meters never need to open the mic a second time (a concurrent WebView2
@@ -3841,26 +3957,51 @@ fn handle_hotkey_up(app: &tauri::AppHandle) {
 /// global-shortcut plugin calls its handler while holding its own lock, and delivers releases from its key-poll
 /// thread: handling a release inline (which shows/hides the capsule through the main thread) while the next
 /// press waited for that lock on the main thread froze Ivy on a quick double-tap (Store test, 2026-10-18).
-fn queue_dictation_key(app: &tauri::AppHandle, pressed: bool) {
-    static TX: std::sync::OnceLock<std::sync::mpsc::Sender<bool>> = std::sync::OnceLock::new();
+/// The Ctrl + Shift watcher queues here too: handled inline, starting the microphone (150-250 ms) blocked its
+/// 15 ms keyboard poll, and a quick second tap made in that time was never seen (Yash, 2026-11-02).
+fn queue_dictation_key(app: &tauri::AppHandle, key: modifier_hotkey::Key, at: Instant) {
+    // `at` = when the key really moved: tap/double-tap timing follows the key, not how long the previous event took
+    // to handle (starting the microphone takes 150-250 ms).
+    static TX: std::sync::OnceLock<std::sync::mpsc::Sender<(modifier_hotkey::Key, Instant)>> = std::sync::OnceLock::new();
     let tx = TX.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        let (tx, rx) = std::sync::mpsc::channel::<(modifier_hotkey::Key, Instant)>();
         let app = app.clone();
         std::thread::Builder::new()
             .name("ivy-dictation-key".into())
             .spawn(move || {
-                for pressed in rx {
-                    dictation_key(&app, pressed);
+                for (key, at) in rx {
+                    match key {
+                        modifier_hotkey::Key::Press => dictation_key(&app, true, at),
+                        modifier_hotkey::Key::Release => dictation_key(&app, false, at),
+                        modifier_hotkey::Key::Cancel => ctrl_shift_cancel(&app),
+                    }
                 }
             })
             .expect("couldn't start the dictation-key thread");
         tx
     });
-    let _ = tx.send(pressed);
+    let _ = tx.send((key, at));
+}
+
+/// Ctrl+Shift+T and friends: not a dictation. Drop the recording this press started, if one is running.
+fn ctrl_shift_cancel(app: &tauri::AppHandle) {
+    debug_log(app, "ctrl+shift: another key joined in — not a dictation");
+    HOTKEY_PHYSICALLY_DOWN.store(false, Ordering::SeqCst);
+    CURRENT_PRESS_TIME.lock().unwrap_or_else(|e| e.into_inner()).take();
+    *LAST_TAP.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    // This very press armed hands-free (it was the second of two taps): that's undone too.
+    if ARMING_PRESS.lock().unwrap_or_else(|e| e.into_inner()).take().is_some() {
+        TOGGLE_RECORDING.store(false, Ordering::SeqCst);
+    }
+    let recording = PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+    if recording && !TOGGLE_RECORDING.load(Ordering::SeqCst) {
+        cancel_dictation_internal(app, "Ctrl + Shift was part of another shortcut — recording dropped");
+    }
 }
 
 /// One press or release of the dictation key, from the OS hotkey (Alt + Space) or the Ctrl + Shift watcher.
-fn dictation_key(app: &tauri::AppHandle, pressed: bool) {
+/// `at`: when the key event happened.
+fn dictation_key(app: &tauri::AppHandle, pressed: bool, at: Instant) {
     // Raw event, logged before any routing: shows whether a Released ever arrived during a stuck recording.
     debug_log(app, &format!("raw hotkey event: {}", if pressed { "Pressed" } else { "Released" }));
     if pressed && is_paused() {
@@ -3872,35 +4013,26 @@ fn dictation_key(app: &tauri::AppHandle, pressed: bool) {
             debug_log(app, "raw hotkey event: Pressed while already down — duplicate/auto-repeat, ignored");
             return;
         }
-        route_dictation_press(app);
+        route_dictation_press(app, at);
     } else {
         if !HOTKEY_PHYSICALLY_DOWN.swap(false, Ordering::SeqCst) {
             debug_log(app, "raw hotkey event: Released while already up — duplicate, ignored");
             return;
         }
-        route_dictation_release(app);
+        route_dictation_release(app, at);
     }
 }
 
 /// Turns the Ctrl + Shift dictation key on or off (modifier_hotkey.rs).
 fn set_ctrl_shift(app: &tauri::AppHandle, on: bool) {
     let app = app.clone();
-    modifier_hotkey::set_enabled(on, move |key| {
-        debug_log(&app, &format!("ctrl+shift watcher: {key:?}"));
-        match key {
-        modifier_hotkey::Key::Press if !gpu_monitor::is_sleeping() => dictation_key(&app, true),
-        modifier_hotkey::Key::Press => {}
-        modifier_hotkey::Key::Release => dictation_key(&app, false),
-        // Ctrl+Shift+T and friends: not a dictation. Drop the recording it started, if one is running.
-        modifier_hotkey::Key::Cancel => {
-            HOTKEY_PHYSICALLY_DOWN.store(false, Ordering::SeqCst);
-            CURRENT_PRESS_TIME.lock().unwrap_or_else(|e| e.into_inner()).take();
-            let recording = PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_some();
-            if recording && !TOGGLE_RECORDING.load(Ordering::SeqCst) {
-                cancel_dictation_internal(&app, "Ctrl + Shift was part of another shortcut — recording dropped");
-            }
+    modifier_hotkey::set_enabled(on, move |key, at| {
+        // Nothing slow here (no log file write): this runs on the 15 ms keyboard poll, and a stalled poll missed a
+        // quick second tap (live test, 2026-11-02). The worker logs each key.
+        if key == modifier_hotkey::Key::Press && gpu_monitor::is_sleeping() {
+            return;
         }
-        }
+        queue_dictation_key(&app, key, at);
     });
 }
 
@@ -4000,23 +4132,28 @@ fn get_pause() -> u64 {
 /// normally) or a quick tap (provisionally discard it, arm for a possible
 /// second tap). A press that arrives while already toggle-armed always
 /// means "stop", regardless of how long that press itself is held.
-fn route_dictation_press(app: &tauri::AppHandle) {
+fn route_dictation_press(app: &tauri::AppHandle, at: Instant) {
     if TOGGLE_RECORDING.load(Ordering::SeqCst) {
+        let armed_at = *ARMED_AT.lock().unwrap_or_else(|e| e.into_inner());
+        if armed_at.is_some_and(|t| at.saturating_duration_since(t) < std::time::Duration::from_millis(RIGHT_AFTER_ARMING_MS)) {
+            debug_log(app, "press right after hands-free started — the 2nd tap of a fresh double-tap, recording carries on");
+            return;
+        }
         debug_log(app, "hotkey press while toggle-armed -> stopping hands-free recording");
         handle_hotkey_up(app);
         TOGGLE_RECORDING.store(false, Ordering::SeqCst);
         *LAST_TAP.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        ARMING_PRESS.lock().unwrap_or_else(|e| e.into_inner()).take();
         return;
     }
 
-    let now = Instant::now();
-    let mut last_tap = LAST_TAP.lock().unwrap_or_else(|e| e.into_inner());
+    let now = at;
+    // Taking the tap claims it: its expiry timer finds nothing and leaves the recording alone.
+    let last_tap = LAST_TAP.lock().unwrap_or_else(|e| e.into_inner()).take().map(|(t, _)| t);
     let gap_ms = last_tap.map(|t| now.duration_since(t).as_millis());
     let is_second_tap = last_tap
         .map(|t| now.duration_since(t) < std::time::Duration::from_millis(DOUBLE_PRESS_WINDOW_MS))
         .unwrap_or(false);
-    *last_tap = None;
-    drop(last_tap);
     debug_log(
         app,
         &format!(
@@ -4024,19 +4161,33 @@ fn route_dictation_press(app: &tauri::AppHandle) {
             gap_ms.map_or("none".to_string(), |g| format!("{g}ms"))
         ),
     );
+    let tap_still_recording = last_tap.is_some() && PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+    if last_tap.is_some() && !is_second_tap && tap_still_recording {
+        // A tap whose window just ran out before its timer fired: drop it, then this press starts fresh.
+        cancel_dictation_internal(app, "earlier quick tap expired — discarded");
+    }
 
     if is_second_tap {
-        // Confirmed double-press: this press's own recording (started
-        // below like any other) stays live hands-free until the next press,
-        // not just for as long as this key happens to be held.
-        handle_hotkey_down(app);
-        // Only arm toggle mode if a dictation actually started — mic-open
+        // Confirmed double-press -> hands-free until the next press. The first tap's recording is still running
+        // (route_dictation_release keeps it through the window), so it simply carries on: no restart, no overlay
+        // flicker, and words said right after the first tap are kept (Yash, 2026-11-02).
+        if !tap_still_recording {
+            handle_hotkey_down(app);
+        }
+        // Only arm toggle mode if a dictation is actually running — mic-open
         // failure (device busy/unplugged) makes `handle_hotkey_down` bail
         // out with nothing in `PENDING`. Arming unconditionally would leave
         // TOGGLE_RECORDING stuck true with nothing recording, so the next
         // real press gets swallowed as a no-op "stop" instead of starting.
         let started = PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_some();
         TOGGLE_RECORDING.store(started, Ordering::SeqCst);
+        *ARMING_PRESS.lock().unwrap_or_else(|e| e.into_inner()) = started.then_some(now);
+        *ARMED_AT.lock().unwrap_or_else(|e| e.into_inner()) = started.then_some(now);
+        if started {
+            // The overlay says it's locked on (and how to finish), with a double pop, like Wispr Flow's ping.
+            let _ = app.emit("ivy://hands-free", ());
+        }
+        debug_log(app, &format!("double-press -> hands-free (recording {})", if tap_still_recording { "carried on" } else { "started" }));
     } else {
         handle_hotkey_down(app);
         *CURRENT_PRESS_TIME.lock().unwrap_or_else(|e| e.into_inner()) = Some(now);
@@ -4046,12 +4197,19 @@ fn route_dictation_press(app: &tauri::AppHandle) {
 /// The release half of `route_dictation_press`. Ignored entirely while
 /// toggle-armed (that state only ever ends on a press). Otherwise: held
 /// past `TAP_THRESHOLD_MS` finishes the dictation exactly as a plain hold
-/// always has; held less than that is a tap, not a deliberate recording —
-/// its audio is discarded (the same real cancel path the capsule's own X
-/// button uses) and a timestamp is armed so the very next press, if it
-/// comes quickly, is recognized as the second half of a double-press.
-fn route_dictation_release(app: &tauri::AppHandle) {
+/// always has; held less than that is a tap: it keeps recording for
+/// `DOUBLE_PRESS_WINDOW_MS`, and a press inside that window turns it
+/// hands-free; otherwise it's discarded (the capsule X button's cancel).
+fn route_dictation_release(app: &tauri::AppHandle, at: Instant) {
     if TOGGLE_RECORDING.load(Ordering::SeqCst) {
+        // The arming press itself held down: a tap then a real hold, not a double-tap. Finish it like a hold.
+        let arming = ARMING_PRESS.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if arming.is_some_and(|t| at.saturating_duration_since(t) >= std::time::Duration::from_millis(TAP_THRESHOLD_MS)) {
+            debug_log(app, "second press was held, not tapped -> finishing like a normal hold");
+            TOGGLE_RECORDING.store(false, Ordering::SeqCst);
+            handle_hotkey_up(app);
+            return;
+        }
         debug_log(app, "hotkey release ignored — toggle-armed, only a press ends this");
         return;
     }
@@ -4059,7 +4217,7 @@ fn route_dictation_release(app: &tauri::AppHandle) {
         debug_log(app, "hotkey release with no matching press-time — ignored");
         return;
     };
-    let held = Instant::now().duration_since(press_time);
+    let held = at.saturating_duration_since(press_time);
     debug_log(app, &format!("hotkey release after {}ms held (tap threshold {TAP_THRESHOLD_MS}ms)", held.as_millis()));
     if held >= std::time::Duration::from_millis(TAP_THRESHOLD_MS) {
         let t = Instant::now();
@@ -4072,8 +4230,24 @@ fn route_dictation_release(app: &tauri::AppHandle) {
             debug_log(app, "quick tap with nothing recording — notice stays");
             return;
         }
-        cancel_dictation_internal(app, "quick tap released — held for a possible double-press");
-        *LAST_TAP.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        // Keep recording (and the overlay up) for the double-press window: a second press makes this the hands-free
+        // recording. No second press in time -> discarded, the same real cancel the capsule's X button uses.
+        let seq = TAP_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+        *LAST_TAP.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, seq));
+        debug_log(app, "quick tap released — still recording, waiting for a possible second press");
+        let app = app.clone();
+        std::thread::spawn(move || {
+            // Measured from the key's real release, plus a little slack for a second press still queued behind
+            // slow handling (it's judged by its own real time, `route_dictation_press`).
+            let deadline = at + std::time::Duration::from_millis(DOUBLE_PRESS_WINDOW_MS + 300);
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+            // Held while cancelling, so a press arriving now waits and then starts on a clean slate.
+            let mut last_tap = LAST_TAP.lock().unwrap_or_else(|e| e.into_inner());
+            if last_tap.is_some_and(|(_, s)| s == seq) {
+                *last_tap = None;
+                cancel_dictation_internal(&app, "quick tap, no second press — discarded");
+            }
+        });
     }
 }
 
@@ -4540,20 +4714,45 @@ pub fn run() {
                 // user's current dictation hotkey by construction) and the
                 // manual-paste shortcut (`MANUAL_PASTE_SHORTCUT`).
                 .with_handler(move |app, shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        suppress_alt_menu();
-                    }
+                    let pressed = event.state() == ShortcutState::Pressed;
                     let is_manual_paste = MANUAL_PASTE_SHORTCUT
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .map_or(false, |u| u == *shortcut);
                     if is_manual_paste {
-                        if event.state() == ShortcutState::Pressed {
+                        if pressed {
+                            suppress_alt_menu();
                             paste_manual_clipboard(app);
                         }
                         return;
                     }
-                    queue_dictation_key(app, event.state() == ShortcutState::Pressed);
+                    #[cfg(windows)]
+                    if let Some(vk) = shortcut_vk(shortcut.key) {
+                        // The key watch owns the press after a quick tap; a late message for a press it took (key
+                        // already up again) is not a new one.
+                        let watched = SECOND_TAP_WATCH.load(Ordering::SeqCst) != 0
+                            || (!key_down(vk)
+                                && WATCHED_PRESS_AT
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(500)));
+                        if pressed && !watched && !SHORTCUT_DOWN.swap(true, Ordering::SeqCst) {
+                            let now = Instant::now();
+                            suppress_alt_menu();
+                            queue_dictation_key(app, modifier_hotkey::Key::Press, now);
+                            watch_shortcut_release(app, vk, shortcut.mods, now);
+                        }
+                        // Key repeats, and global-hotkey's own Released (up to 50 ms late), are dropped.
+                        return;
+                    }
+                    if pressed {
+                        suppress_alt_menu();
+                    }
+                    queue_dictation_key(
+                        app,
+                        if event.state() == ShortcutState::Pressed { modifier_hotkey::Key::Press } else { modifier_hotkey::Key::Release },
+                        Instant::now(),
+                    );
                 })
                 .build(),
         )
@@ -4923,6 +5122,20 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn every_parsable_hotkey_has_a_virtual_key() {
+        let vk = |spec: &str| shortcut_vk(parse_hotkey(spec).unwrap().key);
+        assert_eq!(vk("Alt + Space"), Some(0x20));
+        assert_eq!(vk("Ctrl + Shift + K"), Some(0x4B));
+        assert_eq!(vk("Alt + 7"), Some(0x37));
+        assert_eq!(vk("F1"), Some(0x70));
+        assert_eq!(vk("Ctrl + F12"), Some(0x7B));
+        assert_eq!(vk("Right Alt"), Some(0xA5));
+        assert_eq!(vk("Caps Lock"), Some(0x14));
+        assert_eq!(vk("Alt + Down"), Some(0x28));
+    }
 
     #[test]
     fn test_is_valid_session_id() {
