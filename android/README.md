@@ -8,7 +8,7 @@ Offline voice dictation for Android. Hold the bubble, talk, and Ivy types into a
 
 ## Install
 
-**Easiest, with automatic updates:** [add Ivy to Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/raj-7676/ivy-dictation) (in Obtainium's app settings for Ivy, turn on "Include prereleases"). Or install the APK by hand:
+**Easiest, with automatic updates:** [add Ivy to Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.glowco.ivy%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fraj-7676%2Fivy-dictation%22%2C%22author%22%3A%22raj-7676%22%2C%22name%22%3A%22Ivy%20Dictation%22%2C%22preferredApkIndex%22%3A0%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3A%20true%2C%20%5C%22fallbackToOlderReleases%5C%22%3A%20true%2C%20%5C%22autoApkFilterByArch%5C%22%3A%20true%7D%22%7D) (in Obtainium's app settings for Ivy, turn on "Include prereleases"). Or install the APK by hand:
 
 1. Download the APK from the [Releases page](https://github.com/raj-7676/ivy-dictation/releases) and open it. When Android asks, allow "install unknown apps" for your browser.
 2. If Google Play Protect shows "unrecognized app", tap **More details > Install anyway**. Ivy is new, so Google has not seen it before. Its source code is public in this folder.
