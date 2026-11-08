@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
@@ -46,6 +48,11 @@
             android:exported="true"
             android:label="Ivy Engine Lab"
             android:theme="@style/Theme.MyApplication" />
+        <!-- Downloads the models in the background (setup wizard) -->
+        <service
+            android:name=".service.ModelDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <!-- The bubble in every app (Settings > Accessibility > Ivy Dictation) -->
         <service
             android:name=".service.IvyAccessibilityService"

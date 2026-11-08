@@ -3,8 +3,7 @@ package com.example.ui.onboarding
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.engine.ModelStore
-import kotlinx.coroutines.Dispatchers
+import com.example.service.ModelDownloadService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -64,14 +63,22 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
     fun startDownload() {
         val s = _uiState.value
         if (s.isDownloading || s.isDownloadComplete) return
-        val ctx = getApplication<Application>()
         _uiState.update { it.copy(isDownloading = true, downloadError = "") }
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                ModelStore.install(ctx) { f -> _uiState.update { it.copy(downloadProgressMb = (f * it.totalModelMb).toInt()) } }
-                _uiState.update { it.copy(isDownloading = false, isDownloadComplete = true, downloadProgressMb = it.totalModelMb) }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(isDownloading = false, downloadError = "No connection. Check the internet and tap Retry.") }
+        ModelDownloadService.start(getApplication())
+    }
+
+    /** The download runs in ModelDownloadService (keeps going in the background); this mirrors its progress. */
+    init {
+        viewModelScope.launch {
+            ModelDownloadService.state.collect { d ->
+                _uiState.update {
+                    it.copy(
+                        isDownloading = d.running || (it.isDownloading && !d.done && d.error.isEmpty()),
+                        isDownloadComplete = d.done || it.isDownloadComplete,
+                        downloadProgressMb = if (d.done) it.totalModelMb else maxOf(it.downloadProgressMb, (d.fraction * it.totalModelMb).toInt()),
+                        downloadError = d.error,
+                    )
+                }
             }
         }
     }
