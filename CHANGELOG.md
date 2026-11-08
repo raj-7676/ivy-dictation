@@ -2,9 +2,13 @@
 
 All notable changes to Ivy. Downloads are on the [Releases page](https://github.com/raj-7676/ivy-dictation/releases).
 
+## Android 1.0.1 (2026-11-08)
+
+- **Fixes a crash when opening Ivy for the first time** (1.0.0 stopped on the setup screen on Android 12 and later). Smaller APK (22 MB): unused Firebase libraries removed. The accessibility service no longer claims to be a disability tool.
+
 ## Android 1.0.0 (2026-11-08)
 
-- **Ivy for Android.** Hold the floating bubble in any app, talk, and Ivy types what you meant. Fully offline, no account, no tracking. The APK is about 25 MB and is not on the Play Store: get it from the [Releases page](https://github.com/raj-7676/ivy-dictation/releases/tag/android-v1.0.0).
+- **Ivy for Android.** Hold the floating bubble in any app, talk, and Ivy types what you meant. Fully offline, no account, no tracking. The APK is about 22 MB and is not on the Play Store: get it from the [Releases page](https://github.com/raj-7676/ivy-dictation/releases/tag/android-v1.0.1).
 - On first start Ivy downloads its three model files once (about 1.5 GB, from Hugging Face), then never needs the internet. A dropped download resumes.
 - Tone slider after each dictation: Original, Grammar, Formal. Um and uh are removed automatically. Source is in [android/](android/).
 

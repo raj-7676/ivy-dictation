@@ -14,7 +14,7 @@ Website: **[raj-7676.github.io/ivy-dictation](https://raj-7676.github.io/ivy-dic
 
 **[Download Ivy for Linux](https://github.com/raj-7676/ivy-dictation/releases/latest)** ([install steps](#linux))
 
-**[Download Ivy for Android (APK)](https://github.com/raj-7676/ivy-dictation/releases/download/android-v1.0.0/Ivy-Dictation-1.0.0.apk)** ([details](android/README.md)): about 25 MB; it downloads its speech model (1.5 GB) once on first start, then works with no internet.
+**[Download Ivy for Android (APK)](https://github.com/raj-7676/ivy-dictation/releases/download/android-v1.0.1/Ivy-Dictation-1.0.1.apk)** ([details](android/README.md)): about 22 MB; it downloads its speech model (1.5 GB) once on first start, then works with no internet.
 
 ![Ivy turning "um, send it Tuesday, no wait, Thursday at 3" into "Send it Thursday at 3 PM."](docs/ivy-teaser.webp)
 

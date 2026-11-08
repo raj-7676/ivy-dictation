@@ -22,7 +22,8 @@ object Permissions {
     fun accessibility(ctx: Context): Boolean {
         val me = ComponentName(ctx, IvyAccessibilityService::class.java)
         fun has(key: String): Boolean {
-            val v = Settings.Secure.getString(ctx.contentResolver, key) ?: return false
+            // hidden keys (shortcut/button/tile targets) throw SecurityException for normal installed apps on Android 12+
+            val v = runCatching { Settings.Secure.getString(ctx.contentResolver, key) }.getOrNull() ?: return false
             return v.split(':', ',', ';').any { ComponentName.unflattenFromString(it.trim()) == me }
         }
         return has(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ||
