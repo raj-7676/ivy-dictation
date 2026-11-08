@@ -132,9 +132,9 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/models/ivy-lite"
           cd "$RUNNER_TEMP/models/ivy-lite"
-          base=https://github.com/raj-7676/IVY-/releases/download/v0.2.6
-          curl -fsSL --retry 3 -o mmproj-ivy-lite-f16.gguf "$base/mmproj-ivy-lite-f16.gguf"
-          curl -fsSL --retry 3 -o ivy-lite-Q8_0.gguf "$base/ivy-lite-Q8_0.gguf"
+          base=https://huggingface.co/raj7676/ivy-dictation/resolve/main  # same files and hashes as the v0.2.6 release (that GitHub download returned 504s)
+          curl -fsSL --retry 3 -o mmproj-ivy-lite-f16.gguf "$base/mmproj-ivy-f16.gguf"
+          curl -fsSL --retry 3 -o ivy-lite-Q8_0.gguf "$base/ivy-Q8_0.gguf"
           printf '%s  %s\n' \
             07ed1cc9c96c19aba84354b9135c69332747a98d50363a321bf1418aececfc00 mmproj-ivy-lite-f16.gguf \
             da50c4dcfc9bb36baeca3a5dedb742988dbe1058ab282dbb62d8a31be27795ed ivy-lite-Q8_0.gguf \
