@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App icon foreground: the official Ivy mark, small enough for circle/squircle masks (inside the 66dp safe zone),
+     bright fills and no thin strokes so it stays crisp at icon size. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M37.49,31.50 L46.80,45.30 L54.00,56.10 L61.20,45.30 L70.51,31.50 L54.00,39.00 Z"><aapt:attr name="android:fillColor"><gradient android:type="linear" android:startX="0" android:startY="31.50" android:endX="0" android:endY="56.10" android:startColor="#FFFF9A3D" android:endColor="#FFFF6B00"/></aapt:attr></path>
+    <path android:pathData="M27.00,31.50 L37.49,31.50 L43.80,50.10 L33.60,50.10 Z" android:fillColor="#FFFFFFFF"/>
+    <path android:pathData="M64.20,50.10 L74.40,50.10 L81.00,31.50 L70.51,31.50 Z" android:fillColor="#FFFFFFFF"/>
+    <path android:pathData="M33.60,50.10 L43.80,50.10 L50.40,63.30 L42.00,63.30 Z" android:fillColor="#FFF4F4F6"/>
+    <path android:pathData="M66.00,63.30 L57.60,63.30 L64.20,50.10 L74.40,50.10 Z" android:fillColor="#FFF4F4F6"/>
+    <path android:pathData="M42.00,63.30 L54.00,62.10 L66.00,63.30 L54.00,76.50 Z"><aapt:attr name="android:fillColor"><gradient android:type="radial" android:centerX="54.00" android:centerY="68.10" android:gradientRadius="10.20"><item android:offset="0" android:color="#FFFFC08A"/><item android:offset="0.55" android:color="#FFFF7A1A"/><item android:offset="1" android:color="#FFFF6B00"/></gradient></aapt:attr></path>
+</vector>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Official Ivy mark (same polygons/colours as the desktop IvyLogo.tsx / ivy-mark.svg). Never recolour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt" android:width="48dp" android:height="40dp" android:viewportWidth="192" android:viewportHeight="162">
+    <path android:pathData="M41.00,6.00 L72.00,52.00 L96.00,88.00 L120.00,52.00 L151.00,6.00 L96.00,31.00 Z" android:strokeColor="#99FF7828" android:strokeWidth="1.00" android:strokeLineJoin="round"><aapt:attr name="android:fillColor"><gradient android:type="linear" android:startX="0" android:startY="6.00" android:endX="0" android:endY="88.00" android:startColor="#FFFF8833" android:endColor="#FFFF5500"/></aapt:attr></path>
+    <path android:pathData="M6.00,6.00 L41.00,6.00 L62.00,68.00 L28.00,68.00 Z" android:strokeColor="#4DFF6B00" android:strokeWidth="0.80" android:strokeLineJoin="round" android:fillColor="#FFFFFFFF"/>
+    <path android:pathData="M130.00,68.00 L164.00,68.00 L186.00,6.00 L151.00,6.00 Z" android:strokeColor="#4DFF6B00" android:strokeWidth="0.80" android:strokeLineJoin="round" android:fillColor="#FFFFFFFF"/>
+    <path android:pathData="M28.00,68.00 L62.00,68.00 L84.00,112.00 L56.00,112.00 Z" android:strokeColor="#66FF6B00" android:strokeWidth="0.80" android:strokeLineJoin="round" android:fillColor="#FFF1F5F9"/>
+    <path android:pathData="M136.00,112.00 L108.00,112.00 L130.00,68.00 L164.00,68.00 Z" android:strokeColor="#66FF6B00" android:strokeWidth="0.80" android:strokeLineJoin="round" android:fillColor="#FFF1F5F9"/>
+    <path android:pathData="M56.00,112.00 L96.00,108.00 L136.00,112.00 L96.00,156.00 Z" android:strokeColor="#FFFFAA66" android:strokeWidth="1.20" android:strokeLineJoin="round"><aapt:attr name="android:fillColor"><gradient android:type="radial" android:centerX="96.00" android:centerY="132.00" android:gradientRadius="40.00"><item android:offset="0" android:color="#FFFFAA66"/><item android:offset="0.6" android:color="#FFFF6B00"/><item android:offset="1" android:color="#FFE05300"/></gradient></aapt:attr></path>
+</vector>

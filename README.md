@@ -1,6 +1,6 @@
 # Ivy
 
-**Talk, and clean text appears wherever your cursor is. Fully offline and free, with all its source code public, for Windows and Linux.**
+**Talk, and clean text appears wherever your cursor is. Fully offline and free, with all its source code public, for Windows, Linux and Android.**
 
 Hold a key, speak naturally, let go. Ivy turns your speech into clean, ready-to-send text and pastes it
 into whatever you were typing in: email, chat, documents, code editors, browsers, anything.
@@ -13,6 +13,8 @@ cloud. Your voice never leaves your PC.
 Website: **[raj-7676.github.io/ivy-dictation](https://raj-7676.github.io/ivy-dictation/)**
 
 **[Download Ivy for Linux](https://github.com/raj-7676/ivy-dictation/releases/latest)** ([install steps](#linux))
+
+**[Download Ivy for Android (APK)](https://github.com/raj-7676/ivy-dictation/releases/download/android-v1.0.0/Ivy-Dictation-1.0.0.apk)** ([details](android/README.md)): about 25 MB; it downloads its speech model (1.5 GB) once on first start, then works with no internet.
 
 ![Ivy turning "um, send it Tuesday, no wait, Thursday at 3" into "Send it Thursday at 3 PM."](docs/ivy-teaser.webp)
 

@@ -2,6 +2,12 @@
 
 All notable changes to Ivy. Downloads are on the [Releases page](https://github.com/raj-7676/ivy-dictation/releases).
 
+## Android 1.0.0 (2026-11-08)
+
+- **Ivy for Android.** Hold the floating bubble in any app, talk, and Ivy types what you meant. Fully offline, no account, no tracking. The APK is about 25 MB and is not on the Play Store: get it from the [Releases page](https://github.com/raj-7676/ivy-dictation/releases/tag/android-v1.0.0).
+- On first start Ivy downloads its three model files once (about 1.5 GB, from Hugging Face), then never needs the internet. A dropped download resumes.
+- Tone slider after each dictation: Original, Grammar, Formal. Um and uh are removed automatically. Source is in [android/](android/).
+
 ## 0.3.1 (2026-11-02)
 
 - **Double-tap for hands-free now works the way you actually tap.** Two quick presses of Alt+Space up to a second apart lock the recording on (it was 0.6 s, too tight for a two-key shortcut). The recording starts on your first tap and simply carries on, so the overlay no longer blinks off between taps and nothing you say right away is lost. Tap timing is measured from the real key presses, not from how long Ivy took to react.

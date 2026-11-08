@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Ivy Dictation</string>
+    <string name="ivy_accessibility_description">Shows the Ivy bubble when you tap a text box, and types what you say into it. Everything stays on this phone: Ivy reads only the box you are typing in, only to put your words there.</string>
+</resources>
