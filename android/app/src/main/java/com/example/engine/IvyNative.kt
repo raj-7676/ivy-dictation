@@ -8,9 +8,10 @@ object IvyNative {
 
     /**
      * Loads the CPU code once. Every ARM level is in the APK (libggml-cpu-android_*.so, plain ARMv8.0 up to
-     * ARMv9 + SME); llama.cpp picks the best one this phone's chip supports. Pass applicationInfo.nativeLibraryDir.
+     * ARMv9 + SME). The newest level is not always the fastest (S26: 2.5x slower audio reading), so the first start
+     * times each level this chip supports and keeps the fastest in [cacheDir]/cpu_code.txt. Use [Engine.initBackends].
      */
-    external fun initBackends(libDir: String)
+    external fun initBackends(libDir: String, cacheDir: String)
 
     /** Which compute backends/CPU code were picked, for the test log. */
     external fun cpuInfo(): String
@@ -37,6 +38,9 @@ object IvyNative {
 
     /** "Make it professional": loads the small rewrite model (once). */
     external fun rewriteLoad(path: String): Boolean
+
+    /** Frees the rewrite model; the next [rewriteLoad] loads it again. */
+    external fun rewriteFree()
 
     /** The professional version of [utf8] text (never with an em or en dash); the input unchanged if it fails. */
     external fun rewrite(utf8: ByteArray): String

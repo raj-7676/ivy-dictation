@@ -1,0 +1,289 @@
+# Ivy's changes to llama.cpp (vendored at upstream commit bed0a856606ee4a24a164066f73d2379447033f5, ggml-org/llama.cpp).
+# Every change is marked IVY PATCH in the code. Apply from the llama.cpp root: git apply llama.cpp-ivy.patch
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 1d0554f..934005b 100644
+--- src/llama-kv-cache.cpp
++++ src/llama-kv-cache.cpp
+@@ -1,5 +1,7 @@
+ #include "llama-kv-cache.h"
+ 
++#include <cstdlib>
++
+ #include "llama-impl.h"
+ #include "llama-io.h"
+ #include "llama-model.h"
+@@ -290,7 +292,12 @@ llama_kv_cache::llama_kv_cache(
+ 
+         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
+ 
+-        ggml_backend_buffer_clear(buf, 0);
++        // IVY PATCH: a freshly allocated KV buffer is already zero (new anonymous pages), and writing 448 MB of zeros
++        // made all of it resident at once. Left untouched, only the cells a dictation really uses take memory
++        // (about 130 MB for a minute of speech). IVY_KV_CLEAR=1 restores the clear.
++        if (std::getenv("IVY_KV_CLEAR")) {
++            ggml_backend_buffer_clear(buf, 0);
++        }
+         ctxs_bufs.emplace_back(std::move(ctx), buf);
+     }
+ 
+diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
+index 50fb6c4..afc13ac 100644
+--- tools/mtmd/clip.cpp
++++ tools/mtmd/clip.cpp
+@@ -26,6 +26,12 @@
+ #include <array>
+ #include <functional>
+ #include <float.h>
++#if defined(__linux__)
++#include <fcntl.h>      // IVY PATCH: weights mapped from the file (load_tensors)
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#endif
+ 
+ struct clip_logger_state g_logger_state = {clip_log_callback_default, NULL};
+ 
+@@ -228,7 +234,17 @@ struct clip_ctx {
+         debug_output_embeddings = std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr;
+     }
+ 
++    // IVY PATCH: the weights are mapped from the file (see load_tensors); unmapped after the buffer that points into it
++    void * ivy_map = nullptr;
++    size_t ivy_map_size = 0;
++
+     ~clip_ctx() {
++#if defined(__linux__)
++        if (ivy_map) {
++            buf.reset();
++            munmap(ivy_map, ivy_map_size);
++        }
++#endif
+         ggml_backend_free(backend);
+         if (backend != backend_cpu) {
+             ggml_backend_free(backend_cpu);
+@@ -1806,6 +1822,11 @@ struct clip_model_loader {
+                                              model.proj_type == PROJECTOR_TYPE_GLMA;
+                         get_u32(KEY_A_PROJ_STACK_FACTOR, hparams.proj_stack_factor, require_stack);
+                         hparams.ffn_op = FFN_GELU_ERF;
++                        // IVY PATCH: Ivy encodes 8 s windows (800 mel frames). Reserving for the 30 s default kept a
++                        // 554 MB compute buffer; a longer chunk still works (the scheduler grows the buffer).
++                        if (model.proj_type == PROJECTOR_TYPE_QWEN3A) {
++                            hparams.warmup_audio_size = 800;
++                        }
+                         log_ffn_op = "gelu_erf"; // temporary solution for logging
+ 
+                         // audio preprocessing params
+@@ -3640,10 +3661,60 @@ struct clip_model_loader {
+ 
+             // alloc memory and offload data
+             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
+-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+-            ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++            // IVY PATCH: on the CPU, point the weights straight into a read-only mapping of the file. They become clean
++            // page cache that Android can drop and re-read, instead of ~360 MB of anonymous memory that gets pushed
++            // into zram (which cannot compress weights). Same bytes, same results. IVY_CLIP_NOMAP=1 = old copy.
++            bool ivy_mapped = false;
++#if defined(__linux__)
++            if (!ctx_clip.no_alloc && ggml_backend_buft_is_host(buft) && !std::getenv("IVY_CLIP_NOMAP")) {
++                int fd = open(fname.c_str(), O_RDONLY);
++                struct stat st {};
++                void * addr = MAP_FAILED;
++                if (fd >= 0 && fstat(fd, &st) == 0 && st.st_size > 0) {
++                    addr = mmap(nullptr, (size_t) st.st_size, PROT_READ, MAP_SHARED, fd, 0);
++                }
++                if (fd >= 0) {
++                    close(fd);
++                }
++                if (addr != MAP_FAILED) {
++                    const size_t map_size = (size_t) st.st_size;
++                    ctx_clip.buf.reset(ggml_backend_cpu_buffer_from_ptr(addr, map_size));
++                    bool ok = ctx_clip.buf != nullptr;
++                    for (auto & t : tensors_to_load) {
++                        if (!ok) {
++                            break;
++                        }
++                        ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
++                        auto it_off = tensor_offset.find(t->name);
++                        ok = cur && it_off != tensor_offset.end() && it_off->second % 32 == 0 &&
++                             it_off->second + ggml_nbytes(cur) <= map_size &&
++                             ggml_backend_tensor_alloc(ctx_clip.buf.get(), cur, (char *) addr + it_off->second) == GGML_STATUS_SUCCESS;
++                    }
++                    if (ok) {
++                        ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++                        ctx_clip.ivy_map = addr;
++                        ctx_clip.ivy_map_size = map_size;
++                        ivy_mapped = true;
++                        LOG_INF("%s: weights mapped from %s (%zu bytes)\n", __func__, fname.c_str(), map_size);
++                    } else {
++                        for (auto & t : tensors_to_load) {  // undo a partial mapping, then copy as usual
++                            if (ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name)) {
++                                cur->data = nullptr;
++                                cur->buffer = nullptr;
++                            }
++                        }
++                        ctx_clip.buf.reset();
++                        munmap(addr, map_size);
++                    }
++                }
++            }
++#endif
++            if (!ivy_mapped) {
++                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
++                ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++            }
+             // read the weight from file
+-            if (!ctx_clip.no_alloc) {
++            if (!ctx_clip.no_alloc && !ivy_mapped) {
+                 size_t data_loaded = 0;
+                 for (auto & t : tensors_to_load) {
+                     ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+@@ -4073,6 +4144,32 @@ int clip_get_image_max_tokens(const clip_ctx * ctx) {
+     return hparams.image_max_pixels / patch_area;
+ }
+ 
++void clip_ivy_set_abort_callback(clip_ctx * ctx, ggml_abort_callback cb, void * data) {
++    if (!ctx || !ctx->backend_cpu) {
++        return;
++    }
++    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
++    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
++    auto * set = reg ? (void (*)(ggml_backend_t, ggml_abort_callback, void *))
++                           ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_abort_callback") : nullptr;
++    if (set) {
++        set(ctx->backend_cpu, cb, data);
++    }
++}
++
++void clip_ivy_set_threadpool(clip_ctx * ctx, ggml_threadpool_t tp) {
++    if (!ctx || !ctx->backend_cpu) {
++        return;
++    }
++    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
++    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
++    auto * set = reg ? (void (*)(ggml_backend_t, ggml_threadpool_t))
++                           ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_set_threadpool") : nullptr;
++    if (set) {
++        set(ctx->backend_cpu, tp);
++    }
++}
++
+ void clip_free(clip_ctx * ctx) {
+     if (ctx == nullptr) {
+         return;
+diff --git a/tools/mtmd/clip.h b/tools/mtmd/clip.h
+index 9e12702..f55673c 100644
+--- tools/mtmd/clip.h
++++ tools/mtmd/clip.h
+@@ -135,6 +135,11 @@ int clip_model_n_temporal_merge(const struct clip_ctx * ctx); // TODO @ngxson :
+ 
+ std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * ctx);
+ 
++// IVY PATCH: abort hook on the CPU backend (see mtmd_ivy_set_abort_callback)
++void clip_ivy_set_abort_callback(struct clip_ctx * ctx, ggml_abort_callback cb, void * data);
++// IVY PATCH: threadpool for the CPU backend (see mtmd_ivy_set_threadpool)
++void clip_ivy_set_threadpool(struct clip_ctx * ctx, ggml_threadpool_t tp);
++
+ struct clip_cap {
+     bool has_vision;
+     bool has_audio;
+diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
+index 6c8b194..8512d41 100644
+--- tools/mtmd/mtmd-audio.cpp
++++ tools/mtmd/mtmd-audio.cpp
+@@ -1,3 +1,5 @@
++#include <atomic>
++#include "mtmd.h" // IVY PATCH: C linkage for mtmd_ivy_* below
+ #include "mtmd-audio.h"
+ 
+ #define _USE_MATH_DEFINES // for M_PI
+@@ -621,6 +623,20 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
+     return true;
+ }
+ 
++// IVY PATCH (live transcription): see mtmd_ivy_pin_mel_max in mtmd.h.
++static std::atomic<bool>   g_ivy_mel_max_pinned{false};
++static std::atomic<double> g_ivy_mel_max_value{0.0};
++static std::atomic<double> g_ivy_last_mel_max{0.0};
++
++void mtmd_ivy_pin_mel_max(bool pinned, double value) {
++    g_ivy_mel_max_value.store(value);
++    g_ivy_mel_max_pinned.store(pinned);
++}
++
++double mtmd_ivy_last_mel_max(void) {
++    return g_ivy_last_mel_max.load();
++}
++
+ //
+ // mtmd_audio_preprocessor_qwen3a
+ //
+@@ -685,6 +701,12 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
+         for (float v : mel_full.data) {
+             if (v > mmax) mmax = v;
+         }
++        // IVY PATCH (live transcription): report the clip-wide maximum and let Ivy pin it, so 8 s windows read
++        // while the speaker is still talking use the same normalization as the finished recording.
++        g_ivy_last_mel_max.store(mmax);
++        if (g_ivy_mel_max_pinned.load()) {
++            mmax = g_ivy_mel_max_value.load();
++        }
+         mmax -= 8.0;
+         for (float & v : mel_full.data) {
+             v = (std::max((double)v, mmax) + 4.0) / 4.0;
+diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
+index 9e7b1cc..f91d0a9 100644
+--- tools/mtmd/mtmd.cpp
++++ tools/mtmd/mtmd.cpp
+@@ -2747,3 +2747,28 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname,
+         return {{}, -1, false};
+     }
+ }
++
++// IVY PATCH: see mtmd.h
++void mtmd_ivy_set_abort_callback(mtmd_context * ctx, ggml_abort_callback cb, void * data) {
++    if (!ctx) {
++        return;
++    }
++    clip_ivy_set_abort_callback(ctx->ctx_a, cb, data);
++    clip_ivy_set_abort_callback(ctx->ctx_v, cb, data);
++}
++
++// IVY PATCH: see mtmd.h (every encode passes ctx->n_threads on to the CPU backend)
++void mtmd_ivy_set_n_threads(mtmd_context * ctx, int n_threads) {
++    if (ctx && n_threads > 0) {
++        ctx->n_threads = n_threads;
++    }
++}
++
++// IVY PATCH: see mtmd.h
++void mtmd_ivy_set_threadpool(mtmd_context * ctx, ggml_threadpool_t tp) {
++    if (!ctx) {
++        return;
++    }
++    clip_ivy_set_threadpool(ctx->ctx_a, tp);
++    clip_ivy_set_threadpool(ctx->ctx_v, tp);
++}
+diff --git a/tools/mtmd/mtmd.h b/tools/mtmd/mtmd.h
+index bcd76a9..580e6b3 100644
+--- tools/mtmd/mtmd.h
++++ tools/mtmd/mtmd.h
+@@ -172,6 +172,19 @@ MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
+ //     the bitmap is considered "empty", and will be treated as a placeholder for counting tokens
+ //     you can pass the bitmap via mtmd_tokenize(), then call mtmd_*_get_n_tokens() to count the tokens
+ //     note: passing a placeholder bitmap to mtmd_encode() will return an error
++// IVY PATCH (live transcription, Qwen3-ASR audio only): pin the clip-wide log-mel maximum used to normalize audio
++// (pinned=false restores the normal per-clip maximum); mtmd_ivy_last_mel_max returns the last measured maximum.
++MTMD_API void   mtmd_ivy_pin_mel_max(bool pinned, double value);
++MTMD_API double mtmd_ivy_last_mel_max(void);
++// IVY PATCH: abort hook for the CPU encoders (checked between graph nodes). Ivy uses it so a live draft that is
++// still encoding audio gives way at once when the speaker lets go.
++MTMD_API void   mtmd_ivy_set_abort_callback(mtmd_context * ctx, ggml_abort_callback cb, void * data);
++// IVY PATCH: change the encoders' thread count between encodes (Ivy drops threads when cores are busy elsewhere).
++MTMD_API void   mtmd_ivy_set_n_threads(mtmd_context * ctx, int n_threads);
++// IVY PATCH: run the CPU encoders on this threadpool (the text model's): one set of compute threads, kept warm,
++// instead of fresh threads per encode competing with the pool's still-spinning workers. tp must outlive its use.
++MTMD_API void   mtmd_ivy_set_threadpool(mtmd_context * ctx, ggml_threadpool_t tp);
++
+ MTMD_API mtmd_bitmap *         mtmd_bitmap_init           (uint32_t nx, uint32_t ny, const unsigned char * data);
+ MTMD_API mtmd_bitmap *         mtmd_bitmap_init_from_audio(size_t n_samples,         const float         * data);
+ MTMD_API uint32_t              mtmd_bitmap_get_nx     (const mtmd_bitmap * bitmap);

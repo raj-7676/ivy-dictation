@@ -27,6 +27,7 @@ class MicRecorder {
         running = true
         r.startRecording()
         thread = Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
             val chunk = FloatArray(1600)
             while (running) {
                 val n = r.read(chunk, 0, chunk.size, AudioRecord.READ_BLOCKING)

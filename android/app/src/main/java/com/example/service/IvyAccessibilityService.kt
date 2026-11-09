@@ -96,21 +96,21 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     private val engine = object : BubbleEngine {
         override fun start(): Boolean {
             if (!Permissions.mic(this@IvyAccessibilityService)) return false
-            val h = Engine.handle
-            if (h == 0L) {
-                Engine.preload(this@IvyAccessibilityService)
-                Log.w(TAG, "engine not ready: ${Engine.error}")
+            if (!ModelStore.ready(this@IvyAccessibilityService)) {
+                Log.w(TAG, "engine not ready: the speech model is not downloaded yet")
                 return false
             }
             micForeground(true)
             appName = appLabel(target?.packageName?.toString() ?: appRoot()?.packageName?.toString())
-            dictation = LiveDictation(h, IvyStore.state.value.words.toTypedArray()).also { it.start() }
+            // the engine loads while the user talks and is freed again after a minute idle (Engine.release)
+            dictation = LiveDictation({ Engine.acquire(this@IvyAccessibilityService) }, IvyStore.state.value.words.toTypedArray()).also { it.start() }
             return true
         }
 
         override fun finish(): String? {
             val d = dictation ?: return null
             dictation = null
+            lastUsedAt = android.os.SystemClock.uptimeMillis()
             return try {
                 val r = d.finish()
                 Log.i(TAG, "dictation ${r.audioSecs}s, ${r.afterReleaseMs} ms after release (read ${r.readMs}, write ${r.writeMs}, ${r.tokens} tok, windows ${r.windowsReused} reused/${r.windowsAtEnd} at end, drafts ${r.drafts} kept ${r.accepted}/${r.proposed}, slowest step ${r.maxWindowMs} ms), note '${r.note}'")
@@ -127,13 +127,17 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 Log.e(TAG, "dictation failed", e)
                 null
             } finally {
+                Engine.release()
                 micForeground(false)
             }
         }
 
         override fun cancel() {
-            dictation?.cancel()
+            val d = dictation ?: return
+            d.cancel()
             dictation = null
+            lastUsedAt = android.os.SystemClock.uptimeMillis()
+            Engine.release()
             micForeground(false)
         }
 
@@ -150,7 +154,8 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         super.onServiceConnected()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
-        Engine.preload(this)
+        // the bubble/pill is drawn from this thread: keep it above the engine's compute threads (normal priority)
+        runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY) }
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         IvyStore.init(this)
         // Where the user last left it (default: right edge, above where the keyboard opens).
@@ -254,6 +259,10 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // the user is typing (see warmWhenQuiet). Some boxes (Google search) report only text changes, others only
+        // the moving cursor. A text change needs nothing else: return before the window scan, so typing stays cheap.
+        if (event?.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) { typedAt = android.os.SystemClock.uptimeMillis(); return }
+        if (event?.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED) typedAt = android.os.SystemClock.uptimeMillis()
         if (event != null && bubble.toneVisible && !bubble.toneBusy && event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED &&
             System.currentTimeMillis() - ownEditAt > 1200 && System.currentTimeMillis() - lastToneAt > 1200) {
             bubble.toneVisible = false; Log.i(TAG, "tone slider hide (user touched the text)")
@@ -357,6 +366,44 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     }
 
     private var hideJob: kotlinx.coroutines.Job? = null
+    // The bubble is up (a text box is open): the speech engine loads now, so even a one-word dictation finds it
+    // ready, and is freed a minute after the bubble goes (Engine.release).
+    private var engineHeld = false
+    // Warm the engine only after the box has been open and quiet (no typing) for WARM_QUIET_MS: a quick search (tap,
+    // type, Enter) never triggers a load, so typing never competes with one. Holding the bubble loads at once anyway.
+    private var warmJob: kotlinx.coroutines.Job? = null
+    private var shownAt = 0L
+    private var typedAt = 0L
+
+    private suspend fun warmWhenQuiet() {
+        while (true) {
+            val wait = WARM_QUIET_MS - (android.os.SystemClock.uptimeMillis() - maxOf(shownAt, typedAt))
+            if (wait <= 0) break
+            delay(wait)
+        }
+        warmJob = null
+        if (!engineHeld) {
+            engineHeld = true
+            lastUsedAt = android.os.SystemClock.uptimeMillis()
+            Engine.acquireAsync(this)
+            heldJob = scope.launch { letGoWhenUnused() }
+        }
+    }
+
+    // A box left open (a chat with the keyboard up) must not hold ~1 GB for ever: after HELD_IDLE_MS without a
+    // dictation the bubble lets go (Engine frees it a minute later). Holding the bubble again reloads it during the
+    // 1.5 s hold. A dictation in progress keeps its own hold, so nothing is freed under it.
+    private var heldJob: kotlinx.coroutines.Job? = null
+    @Volatile private var lastUsedAt = 0L
+
+    private suspend fun letGoWhenUnused() {
+        while (engineHeld) {
+            val wait = HELD_IDLE_MS - (android.os.SystemClock.uptimeMillis() - lastUsedAt)
+            if (wait <= 0) { engineHeld = false; Engine.release(); break }
+            delay(wait)
+        }
+        heldJob = null
+    }
 
     /** Showing is instant; hiding waits 350 ms and is dropped if the bubble should be visible again (focus flicker). */
     private fun setShown(show: Boolean) {
@@ -364,8 +411,17 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         if (show) {
             hideJob?.cancel(); hideJob = null
             if (v.visibility != View.VISIBLE) v.visibility = View.VISIBLE
+            if (!engineHeld && warmJob == null) {
+                shownAt = android.os.SystemClock.uptimeMillis()
+                warmJob = scope.launch { warmWhenQuiet() }
+            }
         } else if (v.visibility == View.VISIBLE && hideJob == null) {
-            hideJob = scope.launch { delay(350); hideJob = null; view?.visibility = View.GONE }
+            hideJob = scope.launch {
+                delay(350); hideJob = null; view?.visibility = View.GONE
+                warmJob?.cancel(); warmJob = null
+                heldJob?.cancel(); heldJob = null
+                if (engineHeld) { engineHeld = false; Engine.release() }
+            }
         }
     }
 
@@ -470,6 +526,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         bubble.onPolishLast = ::reopenTone
         polishJob?.cancel(); polishJob = scope.launch { delay(60_000); bubble.polishReady = false }
         toneHasModel = ModelStore.rewrite(this) != null
+        if (toneHasModel) Engine.preloadRewriter(this) // ready by the time a finger reaches Grammar/Formal; frees itself after 60 s
         bubble.toneStops = if (toneHasModel) listOf("Original", "Grammar", "Formal") else listOf("Original", "Grammar")
         bubble.toneLevel = 0
         bubble.toneBusy = false
@@ -646,10 +703,22 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         // Samsung fires this on mic/audio changes while we record; we give no spoken feedback, so never cancel here.
     }
 
+    @Suppress("DEPRECATION")
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // Android is short of memory: give the models back now instead of after the idle minute (never mid-dictation)
+        if (level >= TRIM_MEMORY_RUNNING_LOW) {
+            Thread { Engine.unloadIfIdle(); Engine.freeRewriter() }.start()  // both may wait for work in progress
+        }
+    }
+
     override fun onDestroy() {
         if (::prefs.isInitialized) prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         dictation?.cancel()
         dictation = null
+        warmJob?.cancel(); warmJob = null
+        heldJob?.cancel(); heldJob = null
+        if (engineHeld) { engineHeld = false; Engine.release() }
         view?.let { wm.removeView(it) }
         view = null
         scope.cancel()
@@ -665,6 +734,8 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         const val WIN_H = 64   // dp
         const val MENU_H = 220 // dp: bubble + the History / Record / Cancel menu
         const val TONE_H = 120 // dp: bubble + the tone slider
+        const val WARM_QUIET_MS = 2000L
+        const val HELD_IDLE_MS = 120_000L
         const val CHIP2_H = 162 // dp: bubble + both chips ("Fix grammar" above "Make it professional?")
         const val CHIP_H = 112 // dp: bubble + the "Make it professional?" / "Undo" chip
     }

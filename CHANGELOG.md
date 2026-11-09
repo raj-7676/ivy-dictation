@@ -2,6 +2,18 @@
 
 All notable changes to Ivy. Downloads are on the [Releases page](https://github.com/raj-7676/ivy-dictation/releases).
 
+## Android 1.0.3 (2026-11-10)
+
+- **Faster, and it no longer gets stuck when other apps keep the phone busy.** Ivy now times its engine on your own phone the first time it starts and uses the fastest version for your CPU. On a Galaxy S26 Ultra a 60-second dictation now appears 2 to 4 seconds after you let go (it was 4 to 6). When other apps are busy, Ivy notices that its threads are waiting for the processor and uses fewer of them until the phone is free again. Before, one busy background app could make a 60-second dictation take over a minute to appear.
+- **Grammar and Formal** adapt to a busy phone the same way.
+- **Uses almost no memory while you are not dictating:** Ivy loads when a text box opens and lets go a minute after you finish (on a CMF Phone 1, from 2.35 GB to about 50 MB when idle).
+- **Long dictations** are split into pieces while you talk (4.4 minutes: about 4 seconds after you let go on the S26).
+- **Smoother bubble** while Ivy is working (the speech engine no longer takes the time the bubble needs to draw).
+
+## Android 1.0.2 (2026-11-08)
+
+- The model download keeps going in the background when you close the app.
+
 ## Android 1.0.1 (2026-11-08)
 
 - **Fixes a crash when opening Ivy for the first time** (1.0.0 stopped on the setup screen on Android 12 and later). Smaller APK (22 MB): unused Firebase libraries removed. The accessibility service no longer claims to be a disability tool.

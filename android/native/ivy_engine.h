@@ -27,8 +27,12 @@ struct IvyReport {
 
 struct IvyEngine;
 
-// Load the compute backends once. lib_dir = where libggml-cpu-*.so live (Android: nativeLibraryDir); nullptr = default.
-void ivy_backend_init(const char * lib_dir);
+// Load the compute backends once. lib_dir = where libggml-cpu-*.so live (Android: nativeLibraryDir); nullptr = next to
+// the program. The fastest CPU code version for this chip is measured once and remembered in cache_dir/cpu_code.txt
+// (Android: filesDir; nullptr = measure every start).
+void ivy_backend_init(const char * lib_dir, const char * cache_dir = nullptr);
+// Which CPU code version was loaded and, when it was just measured, the timings: for the log.
+std::string ivy_cpu_choice();
 
 // n_threads <= 0: pick automatically. n_gpu_layers 0 = CPU only.
 IvyEngine * ivy_load(const char * model_path, const char * mmproj_path, int n_threads, int n_gpu_layers,

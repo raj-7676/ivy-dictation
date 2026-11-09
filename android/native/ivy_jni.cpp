@@ -68,13 +68,13 @@ static std::vector<std::string> dict_of(JNIEnv * env, jobjectArray arr) {
 
 extern "C" {
 
-JNIEXPORT void JNICALL Java_com_example_engine_IvyNative_initBackends(JNIEnv * env, jobject, jstring lib_dir) {
-    ivy_backend_init(jstr(env, lib_dir).c_str());
+JNIEXPORT void JNICALL Java_com_example_engine_IvyNative_initBackends(JNIEnv * env, jobject, jstring lib_dir, jstring cache_dir) {
+    ivy_backend_init(jstr(env, lib_dir).c_str(), jstr(env, cache_dir).c_str());
 }
 
-// Which CPU code the phone picked (e.g. "CPU android_armv8.6_1"), for the test log.
+// Which CPU code the phone picked (e.g. "android_armv8.2_2 (kept); CPU [...]"), for the test log.
 JNIEXPORT jstring JNICALL Java_com_example_engine_IvyNative_cpuInfo(JNIEnv * env, jobject) {
-    std::string out;
+    std::string out = ivy_cpu_choice() + ";";
     for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
         ggml_backend_reg_t r = ggml_backend_reg_get(i);
         out += std::string(out.empty() ? "" : ", ") + ggml_backend_reg_name(r);
@@ -143,6 +143,12 @@ JNIEXPORT jboolean JNICALL Java_com_example_engine_IvyNative_rewriteLoad(JNIEnv 
     if (g_rw) return true;
     g_rw = ivy_rewrite_load(jstr(env, path).c_str(), 0, g_err);
     return g_rw != nullptr;
+}
+
+// Frees the rewrite model (about 0.5 GB) so it does not push the speech model out of RAM between uses.
+JNIEXPORT void JNICALL Java_com_example_engine_IvyNative_rewriteFree(JNIEnv *, jobject) {
+    ivy_rewrite_free(g_rw);
+    g_rw = nullptr;
 }
 
 JNIEXPORT jstring JNICALL Java_com_example_engine_IvyNative_rewrite(JNIEnv * env, jobject, jbyteArray utf8text) {

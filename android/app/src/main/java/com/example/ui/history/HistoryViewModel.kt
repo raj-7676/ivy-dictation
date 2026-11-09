@@ -160,11 +160,15 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
         set { it.copy(retryingId = item.id, toastMessage = "Writing it again…") }
         viewModelScope.launch(Dispatchers.Default) {
             val pcm = AudioFiles.read(ctx, uri)
-            val h = Engine.load(ctx)
-            val text = if (pcm != null && h != 0L) runCatching {
-                val words = IvyStore.state.value.words.toTypedArray()
-                JSONObject(IvyNative.transcribe(h, pcm, pcm.size, words)).getString("text")
-            }.getOrNull() else null
+            val h = Engine.acquire(ctx)
+            val text = try {
+                if (pcm != null && h != 0L) runCatching {
+                    val words = IvyStore.state.value.words.toTypedArray()
+                    JSONObject(IvyNative.transcribe(h, pcm, pcm.size, words)).getString("text")
+                }.getOrNull() else null
+            } finally {
+                Engine.release()
+            }
             val final = text?.let { Rules.applySnippets(it, IvyStore.state.value.snippets) }
             if (!final.isNullOrBlank()) IvyStore.replaceText(item.id, final)
             set { it.copy(retryingId = null, toastMessage = if (final.isNullOrBlank()) "Couldn't write it again" else "Updated") }

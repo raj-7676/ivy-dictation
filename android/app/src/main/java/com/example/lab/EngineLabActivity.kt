@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.engine.DictationResult
+import com.example.engine.Engine
 import com.example.engine.IvyNative
 import com.example.engine.LiveDictation
 import com.example.engine.ModelStore
@@ -94,7 +95,7 @@ private object Lab {
     fun load(ctx: Context, t: Int): String {
         unload()
         if (backends.isEmpty()) {
-            IvyNative.initBackends(ctx.applicationInfo.nativeLibraryDir)
+            Engine.initBackends(ctx.applicationContext)
             backends = IvyNative.cpuInfo()
         }
         val t0 = System.nanoTime()
@@ -260,7 +261,7 @@ private fun LabScreen(ctx: Context, autorun: Boolean) {
                         if (busy) return@detectTapGestures
                         val ok = withContext(Dispatchers.Default) { ensureEngine() }
                         if (!ok) return@detectTapGestures
-                        val d = LiveDictation(Lab.handle)
+                        val d = LiveDictation({ Lab.handle })
                         live = d
                         d.start()
                         talking = true
