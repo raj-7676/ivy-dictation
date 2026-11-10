@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 #include <cstring>
 #include <fstream>
@@ -110,8 +111,14 @@ int main(int argc, char ** argv) {
             app_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - released).count();
         } else if (live) {
             ivy_live_reset(e, {});
-            for (size_t n = 8000; n < pcm.size(); n += 8000)   // 0.5 s of new audio at a time
+            // IVY_TEST_BLOCK=from:to (seconds): no step runs in between, as when one step blocks that long on a slow
+            // or busy phone (99:113 jumps over a piece's whole cut range; the piece must still be cut)
+            double b0 = 0, b1 = 0;
+            if (const char * v = std::getenv("IVY_TEST_BLOCK")) std::sscanf(v, "%lf:%lf", &b0, &b1);
+            for (size_t n = 8000; n < pcm.size(); n += 8000) {  // 0.5 s of new audio at a time
+                if (n > b0 * 16000 && n < b1 * 16000) continue;
                 while (ivy_live_step(e, pcm.data(), n)) {}
+            }
             text = ivy_live_finish(e, pcm.data(), pcm.size(), rep);
         } else {
             text = ivy_transcribe(e, pcm.data(), pcm.size(), {}, rep);

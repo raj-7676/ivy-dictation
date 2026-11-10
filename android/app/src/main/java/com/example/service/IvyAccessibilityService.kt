@@ -86,7 +86,18 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     private lateinit var prefs: android.content.SharedPreferences
     // Settings changes reach the bubble at once
     private val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> applySettings() }
-    private var dictation: LiveDictation? = null
+    @Volatile private var dictation: LiveDictation? = null
+    // start() runs on the main thread, finish() and cancel() on background threads and they wait there (cancel() for
+    // seconds while the engine loads, with the bubble already idle). Under this lock they agree on which dictation is
+    // the current one and whether the "listening" notification is still in use.
+    private val micLock = Any()
+
+    /** Hands out the running dictation once: a second cancel, or a cancel next to a finish, finds none. */
+    private fun takeDictation(): LiveDictation? = synchronized(micLock) { dictation.also { dictation = null } }
+
+    /** The "listening" notification goes, unless a dictation started meanwhile is using the microphone. */
+    private fun micDone() = synchronized(micLock) { if (dictation == null) micForeground(false) }
+
     // The window hangs from the bottom of the screen: it grows UPWARD (menu / chip), so the bubble never moves.
     // Saved position stays "distance from the top to the bubble window's top" for old settings.
     private fun winPx() = WIN_H * resources.displayMetrics.density
@@ -100,16 +111,18 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 Log.w(TAG, "engine not ready: the speech model is not downloaded yet")
                 return false
             }
-            micForeground(true)
+            letGo = false // a dictation: the bubble keeps the engine again afterwards (see letGoWhenUnused)
             appName = appLabel(target?.packageName?.toString() ?: appRoot()?.packageName?.toString())
-            // the engine loads while the user talks and is freed again after a minute idle (Engine.release)
-            dictation = LiveDictation({ Engine.acquire(this@IvyAccessibilityService) }, IvyStore.state.value.words.toTypedArray()).also { it.start() }
+            synchronized(micLock) {
+                micForeground(true)
+                // the engine loads while the user talks and is freed again after a minute idle (Engine.release)
+                dictation = LiveDictation({ Engine.acquire(this@IvyAccessibilityService) }, IvyStore.state.value.words.toTypedArray()).also { it.start() }
+            }
             return true
         }
 
         override fun finish(): String? {
-            val d = dictation ?: return null
-            dictation = null
+            val d = takeDictation() ?: return null
             lastUsedAt = android.os.SystemClock.uptimeMillis()
             return try {
                 val r = d.finish()
@@ -125,20 +138,32 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 text
             } catch (e: Throwable) {
                 Log.e(TAG, "dictation failed", e)
+                // The engine loads while the user talks, so a load that fails (low memory, a damaged model file) is
+                // only known after they have spoken. Keep the recording in History: its Retry writes it later.
+                runCatching {
+                    d.lastAudio?.takeIf { it.size >= 8000 }?.let { pcm ->
+                        val now = System.currentTimeMillis()
+                        AudioFiles.save(this@IvyAccessibilityService, pcm, now)?.let { audio ->
+                            IvyStore.addDictation(NOT_WRITTEN, appName, pcm.size / 16L, audio, now)
+                        }
+                    }
+                }
                 null
             } finally {
                 Engine.release()
-                micForeground(false)
+                micDone()
             }
         }
 
         override fun cancel() {
-            val d = dictation ?: return
+            // The dictation is taken (cleared) BEFORE the wait: d.cancel() waits for its worker, which may be loading
+            // the engine for seconds, while the bubble is already idle. A dictation the user starts in that time is
+            // a new one: clearing afterwards wiped it, left its microphone on and its hold on the engine for ever.
+            val d = takeDictation() ?: return
             d.cancel()
-            dictation = null
             lastUsedAt = android.os.SystemClock.uptimeMillis()
-            Engine.release()
-            micForeground(false)
+            Engine.release() // the hold d's worker took (Engine.acquire)
+            micDone()
         }
 
         override fun level() = dictation?.level ?: 0f
@@ -391,15 +416,19 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     }
 
     // A box left open (a chat with the keyboard up) must not hold ~1 GB for ever: after HELD_IDLE_MS without a
-    // dictation the bubble lets go (Engine frees it a minute later). Holding the bubble again reloads it during the
-    // 1.5 s hold. A dictation in progress keeps its own hold, so nothing is freed under it.
+    // dictation the bubble lets go (Engine frees it a minute later). The next dictation loads it again while the
+    // user talks. A dictation in progress keeps its own hold, so nothing is freed under it.
     private var heldJob: kotlinx.coroutines.Job? = null
     @Volatile private var lastUsedAt = 0L
+    // True from that let-go until the next dictation or until the bubble goes away. While true the bubble does not
+    // warm the engine: every tap, scroll or cursor move in the open box reaches setShown(true), and warming there
+    // took the engine back 2 s after each let-go, so it was never freed while the box stayed open.
+    private var letGo = false
 
     private suspend fun letGoWhenUnused() {
         while (engineHeld) {
             val wait = HELD_IDLE_MS - (android.os.SystemClock.uptimeMillis() - lastUsedAt)
-            if (wait <= 0) { engineHeld = false; Engine.release(); break }
+            if (wait <= 0) { engineHeld = false; letGo = true; Engine.release(); break }
             delay(wait)
         }
         heldJob = null
@@ -411,7 +440,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         if (show) {
             hideJob?.cancel(); hideJob = null
             if (v.visibility != View.VISIBLE) v.visibility = View.VISIBLE
-            if (!engineHeld && warmJob == null) {
+            if (!engineHeld && !letGo && warmJob == null) {
                 shownAt = android.os.SystemClock.uptimeMillis()
                 warmJob = scope.launch { warmWhenQuiet() }
             }
@@ -420,6 +449,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 delay(350); hideJob = null; view?.visibility = View.GONE
                 warmJob?.cancel(); warmJob = null
                 heldJob?.cancel(); heldJob = null
+                letGo = false // the box is gone: the next one warms the engine again
                 if (engineHeld) { engineHeld = false; Engine.release() }
             }
         }
@@ -714,8 +744,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
 
     override fun onDestroy() {
         if (::prefs.isInitialized) prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
-        dictation?.cancel()
-        dictation = null
+        engine.cancel() // a dictation in progress: stops it and gives back its hold on the engine
         warmJob?.cancel(); warmJob = null
         heldJob?.cancel(); heldJob = null
         if (engineHeld) { engineHeld = false; Engine.release() }
@@ -736,6 +765,8 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         const val TONE_H = 120 // dp: bubble + the tone slider
         const val WARM_QUIET_MS = 2000L
         const val HELD_IDLE_MS = 120_000L
+        // History text of a dictation whose recording is kept but could not be written (see engine.finish)
+        const val NOT_WRITTEN = "Couldn't write this one. Tap Retry to try again."
         const val CHIP2_H = 162 // dp: bubble + both chips ("Fix grammar" above "Make it professional?")
         const val CHIP_H = 112 // dp: bubble + the "Make it professional?" / "Undo" chip
     }

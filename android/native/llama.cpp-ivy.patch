@@ -1,7 +1,7 @@
 # Ivy's changes to llama.cpp (vendored at upstream commit bed0a856606ee4a24a164066f73d2379447033f5, ggml-org/llama.cpp).
 # Every change is marked IVY PATCH in the code. Apply from the llama.cpp root: git apply llama.cpp-ivy.patch
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 1d0554f..934005b 100644
+index 1d0554f..6e53979 100644
 --- src/llama-kv-cache.cpp
 +++ src/llama-kv-cache.cpp
 @@ -1,5 +1,7 @@
@@ -12,17 +12,51 @@ index 1d0554f..934005b 100644
  #include "llama-impl.h"
  #include "llama-io.h"
  #include "llama-model.h"
-@@ -290,7 +292,12 @@ llama_kv_cache::llama_kv_cache(
+@@ -14,6 +16,37 @@
+ #include <stdexcept>
+ #include <unordered_map>
+ 
++#if defined(__linux__)
++#include <sys/mman.h>   // IVY PATCH: ivy_zero_buffer
++#include <unistd.h>
++#endif
++
++// IVY PATCH: a new KV buffer must be all zeros. Cells no token has used yet are still multiplied into every attention
++// pass (behind the mask, with weight 0), and 0 x NaN is NaN: stray bytes that read as NaN or Inf would spoil every
++// token. Upstream writes zeros over the whole buffer, which made all 448 MB resident at once. Here the buffer's whole
++// pages are given back to the kernel instead (MADV_DONTNEED): they read as zeros again and take no memory until a
++// dictation really uses them (about 130 MB for a minute of speech). Unlike leaving the buffer untouched, this holds
++// whatever the allocator handed out: Ivy frees and reloads the engine in the same process, and an allocator may then
++// return recycled memory that is not zero (jemalloc, Android 10 and older). IVY_KV_CLEAR=1 = upstream's plain clear.
++static void ivy_zero_buffer(ggml_backend_buffer_t buf) {
++#if defined(__linux__)
++    char * p = ggml_backend_buffer_is_host(buf) && !std::getenv("IVY_KV_CLEAR") ? (char *) ggml_backend_buffer_get_base(buf) : nullptr;
++    if (p != nullptr) {
++        const uintptr_t page = (uintptr_t) sysconf(_SC_PAGESIZE);
++        const uintptr_t lo   = (uintptr_t) p;
++        const uintptr_t hi   = lo + ggml_backend_buffer_get_size(buf);
++        const uintptr_t a    = (lo + page - 1) & ~(page - 1); // [a, b) = the whole pages inside the buffer
++        const uintptr_t b    = hi & ~(page - 1);
++        if (a < b && madvise((void *) a, b - a, MADV_DONTNEED) == 0) {
++            memset((void *) lo, 0, a - lo); // the part-pages at both ends
++            memset((void *) b, 0, hi - b);
++            return;
++        }
++    }
++#endif
++    ggml_backend_buffer_clear(buf, 0);
++}
++
+ static bool ggml_is_power_of_2(int n) {
+     return (n & (n - 1)) == 0;
+ }
+@@ -290,7 +323,8 @@ llama_kv_cache::llama_kv_cache(
  
          LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
  
 -        ggml_backend_buffer_clear(buf, 0);
-+        // IVY PATCH: a freshly allocated KV buffer is already zero (new anonymous pages), and writing 448 MB of zeros
-+        // made all of it resident at once. Left untouched, only the cells a dictation really uses take memory
-+        // (about 130 MB for a minute of speech). IVY_KV_CLEAR=1 restores the clear.
-+        if (std::getenv("IVY_KV_CLEAR")) {
-+            ggml_backend_buffer_clear(buf, 0);
-+        }
++        // IVY PATCH: zeros without making the whole buffer resident (see ivy_zero_buffer)
++        ivy_zero_buffer(buf);
          ctxs_bufs.emplace_back(std::move(ctx), buf);
      }
  

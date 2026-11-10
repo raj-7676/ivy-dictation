@@ -645,27 +645,25 @@ struct CpuTimes {
 constexpr int64_t TXT_W[7][2] = {{1024, 2048}, {1024, 1024}, {1024, 1024}, {2048, 1024}, {1024, 3072}, {1024, 3072}, {3072, 1024}};
 
 // Bench inputs, made once for all versions: pseudo-random numbers (no denormals/NaN, which change the speed), the
-// same as f16 and as Q8_0 rows.
+// same as f16 and as Q8_0 rows. About 36 MB: load_fastest_cpu makes them for one measurement and frees them with it
+// (kept for the life of the process they stayed in the bubble's memory for days).
 struct BenchData {
     std::vector<float> f32;
     std::vector<ggml_fp16_t> f16;
     std::vector<uint8_t> q8[7];
 };
-const BenchData & bench_data() {
-    static BenchData d = [] {
-        BenchData b;
-        b.f32.resize(3584 * 896);
-        uint32_t s = 12345;
-        for (float & x : b.f32) { s = s * 1664525u + 1013904223u; x = ((s >> 9) / 8388608.0f - 0.5f) * 0.2f; }
-        b.f16.resize(b.f32.size());
-        ggml_fp32_to_fp16_row(b.f32.data(), b.f16.data(), (int64_t) b.f32.size());
-        for (int i = 0; i < 7; i++) {
-            b.q8[i].resize(ggml_row_size(GGML_TYPE_Q8_0, TXT_W[i][0]) * TXT_W[i][1]);
-            ggml_quantize_chunk(GGML_TYPE_Q8_0, b.f32.data(), b.q8[i].data(), 0, TXT_W[i][1], TXT_W[i][0], nullptr);
-        }
-        return b;
-    }();
-    return d;
+BenchData make_bench_data() {
+    BenchData b;
+    b.f32.resize(3584 * 896);
+    uint32_t s = 12345;
+    for (float & x : b.f32) { s = s * 1664525u + 1013904223u; x = ((s >> 9) / 8388608.0f - 0.5f) * 0.2f; }
+    b.f16.resize(b.f32.size());
+    ggml_fp32_to_fp16_row(b.f32.data(), b.f16.data(), (int64_t) b.f32.size());
+    for (int i = 0; i < 7; i++) {
+        b.q8[i].resize(ggml_row_size(GGML_TYPE_Q8_0, TXT_W[i][0]) * TXT_W[i][1]);
+        ggml_quantize_chunk(GGML_TYPE_Q8_0, b.f32.data(), b.q8[i].data(), 0, TXT_W[i][1], TXT_W[i][0], nullptr);
+    }
+    return b;
 }
 
 // Can this extra buffer type (the CPU's repacked weight layout) take a Q8_0 matrix multiply? Same test llama.cpp
@@ -688,7 +686,7 @@ bool q8_repack_ok(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
 // on a 104-token audio window; the same layer 24 times on 4 tokens (checking a draft / writing). Fastest single runs.
 // The three parts take about the shares of a real dictation (S26: 10 + 6 + 12 ms; real 60 s: ~30/25/45 %).
 // give_up_ms: stop after the encoder part if it alone is already slower than that.
-CpuTimes time_cpu_code(ggml_backend_reg_t reg, int n_threads, double give_up_ms) {
+CpuTimes time_cpu_code(ggml_backend_reg_t reg, const BenchData & D, int n_threads, double give_up_ms) {
     CpuTimes t;
     ggml_backend_dev_t dev = ggml_backend_reg_dev_count(reg) ? ggml_backend_reg_dev_get(reg, 0) : nullptr;
     ggml_backend_t be = dev ? ggml_backend_dev_init(dev, nullptr) : nullptr;
@@ -712,7 +710,6 @@ CpuTimes time_cpu_code(ggml_backend_reg_t reg, int n_threads, double give_up_ms)
         for (auto * p = f(dev); p && *p; ++p)
             if (q8_repack_ok(dev, *p)) { qbuft = *p; break; }
 
-    const BenchData & D = bench_data();
     ggml_init_params wp = {ggml_tensor_overhead() * 16, nullptr, true};
     ggml_context * cf = ggml_init(wp), * cq = ggml_init(wp);
     ggml_tensor * conv = ggml_new_tensor_4d(cf, GGML_TYPE_F16, 3, 3, 480, 480);
@@ -899,17 +896,18 @@ bool load_fastest_cpu(const std::string & lib_dir, const char * cache_dir) {
         // llama.cpp's own pick (highest score) first; the second pass runs the closest ones again in reverse order,
         // so a phone slowly warming up does not favour whichever went first
         std::sort(libs.begin(), libs.end(), [](const CpuLib & a, const CpuLib & b) { return a.score > b.score; });
+        const BenchData bench = make_bench_data();  // freed at the end of this measurement
         // all versions timed on t threads; false = a timing stalled (a thread kept sharing its core with a busy app)
         auto measure = [&](int t) {
             double best = INFINITY;
             for (CpuLib & c : libs) {
-                c.t = time_cpu_code(c.reg, t, 1.5 * best);
+                c.t = time_cpu_code(c.reg, bench, t, 1.5 * best);
                 if (c.t.stalled) return false;
                 best = std::min(best, c.t.total());
             }
             for (auto it = libs.rbegin(); it != libs.rend(); ++it)
                 if (it->t.total() < 2 * best) {
-                    const CpuTimes t2 = time_cpu_code(it->reg, t, INFINITY);  // each part keeps its faster pass
+                    const CpuTimes t2 = time_cpu_code(it->reg, bench, t, INFINITY);  // each part keeps its faster pass
                     it->t.ear = std::min(it->t.ear, t2.ear);
                     it->t.window = std::min(it->t.window, t2.window);
                     it->t.steps = std::min(it->t.steps, t2.steps);
@@ -1125,8 +1123,13 @@ static void write_draft(IvyEngine * e, const float * pcm, size_t n) {
 
 static void close_piece(IvyEngine * e, const float * pcm, size_t n);
 
+// Length of the current piece's audio (see piece_audio), without making its copy.
+static size_t piece_len(const IvyEngine * e, size_t n_all) {
+    return n_all - std::min(e->piece_start, n_all) + (e->pieces > 0 ? PIECE_PAD : 0);
+}
+
 // The current piece's audio (everything below works on the piece): the recording from piece_start, with PIECE_PAD
-// of silence in front for every piece after the first.
+// of silence in front for every piece after the first (a copy of the whole piece, up to 100 s).
 static const float * piece_audio(IvyEngine * e, const float * pcm_all, size_t n_all, size_t & n) {
     const float * p = pcm_all + std::min(e->piece_start, n_all);
     n = n_all - std::min(e->piece_start, n_all);
@@ -1139,21 +1142,28 @@ static const float * piece_audio(IvyEngine * e, const float * pcm_all, size_t n_
 
 bool ivy_live_step(IvyEngine * e, const float * pcm_all, size_t n_all) {
     if (n_all <= e->piece_start) return false;
-    size_t n = 0;
-    const float * pcm = piece_audio(e, pcm_all, n_all, n);
+    // The length first, the audio (piece_audio's copy) only for a step that has work: this is called about seven
+    // times a second and mostly returns below with nothing due.
+    size_t n = piece_len(e, n_all);
     if (!e->disabled.empty() || e->stop || n < SR / 2) return false;
-    if (n + WINDOW > CHUNK_SECS * SR) { e->disabled = "recording too long for live reading"; return false; }
+    // The cut is checked before "too long": when one step blocks from under 100 s to past 112 s (a slow phone, or
+    // cores busy elsewhere) the piece must still be closed. In the other order live reading was switched off for
+    // the rest of the dictation, and all of it was read after release.
     if (e->n_past > 0 && e->committed >= PIECE_WINDOWS && n >= PIECE_CUT_SECS * SR) {
+        const float * pcm = piece_audio(e, pcm_all, n_all, n);
         close_piece(e, pcm, n);
         return true;
     }
+    if (n + WINDOW > CHUNK_SECS * SR) { e->disabled = "recording too long for live reading"; return false; }
     if (e->n_past > 0 && (e->committed >= complete_windows(n) || e->committed >= PIECE_WINDOWS)) {
         // no window due: a fresher draft as soon as 2 s more were spoken, so the one checked after release is recent
         // (back to back: CMF 59 s clip 6.2-7.7 s -> 3.5-3.7 s after release, same text)
         if (drafts_off() || n < 3 * SR || n < e->last_draft_samples + 2 * SR) return false;
+        const float * pcm = piece_audio(e, pcm_all, n_all, n);
         write_draft(e, pcm, n);
         return true;
     }
+    const float * pcm = piece_audio(e, pcm_all, n_all, n);
     auto g = window_gains(pcm, n, e->gains);
     std::vector<float> scaled = apply_gains(pcm, n, g);
     Chunks c;
@@ -1210,19 +1220,27 @@ static void read_all_and_write(IvyEngine * e, const float * pcm, size_t n, const
     keep_prefix(e);
 }
 
+// Where to cut a long recording: the middle of the quietest 100 ms of s[from, to), looked at every 50 ms; `to` when
+// the range is shorter than that. One rule for the cuts made at release (split_long) and while talking (close_piece).
+static size_t quietest(const float * s, size_t from, size_t to) {
+    const size_t win = SR / 10;
+    size_t cut = to;
+    float best = INFINITY;
+    for (size_t i = from; i + win <= to; i += win / 2) {
+        float en = 0;
+        for (size_t j = 0; j < win; j++) en += s[i + j] * s[i + j];
+        if (en < best) { best = en; cut = i + win / 2; }
+    }
+    return cut;
+}
+
 // longer than one model pass: cut at the quietest 100 ms in the last 20 s before each 120 s limit (lite.rs)
 static std::vector<std::pair<size_t, size_t>> split_long(size_t n, const float * s) {
-    const size_t win = SR / 10, limit = CHUNK_SECS * SR;
+    const size_t limit = CHUNK_SECS * SR;
     std::vector<std::pair<size_t, size_t>> out;
     size_t start = 0;
     while (n - start > limit) {
-        size_t best = limit;
-        float be = INFINITY;
-        for (size_t i = limit - 20 * SR; i + win <= limit; i += win / 2) {
-            float en = 0;
-            for (size_t j = 0; j < win; j++) en += s[start + i + j] * s[start + i + j];
-            if (en < be) { be = en; best = i + win / 2; }
-        }
+        const size_t best = quietest(s + start, limit - 20 * SR, limit);
         out.push_back({start, best});
         start += best;
     }
@@ -1312,14 +1330,7 @@ static std::string finish_piece(IvyEngine * e, const float * pcm, size_t n, IvyR
 // A long dictation's piece is done (called while the speaker keeps talking): close it at its quietest 0.1 s after
 // the last read window, keep its text, and start the next piece there.
 static void close_piece(IvyEngine * e, const float * pcm, size_t n) {
-    const size_t win = SR / 10, from = e->committed * WINDOW + LOOKAHEAD, to = std::min(n, PIECE_CUT_SECS * SR);
-    size_t cut = to;
-    float best = INFINITY;
-    for (size_t i = from; i + win <= to; i += win / 2) {
-        float en = 0;
-        for (size_t j = 0; j < win; j++) en += pcm[i + j] * pcm[i + j];
-        if (en < best) { best = en; cut = i + win / 2; }
-    }
+    const size_t cut = quietest(pcm, e->committed * WINDOW + LOOKAHEAD, std::min(n, PIECE_CUT_SECS * SR));
     IvyReport rep;
     std::string text = finish_piece(e, pcm, cut, rep);
     if (std::getenv("IVY_DEBUG"))

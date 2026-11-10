@@ -37,6 +37,8 @@ class LiveDictation(private val loadEngine: () -> Long, private val dictionary: 
     private val mic = MicRecorder()
     private var worker: Thread? = null
     @Volatile private var recording = false
+    // set by cancel(): from then on this dictation's worker leaves the engine alone (the next dictation may own it)
+    @Volatile private var cancelled = false
     @Volatile private var maxStepMs = 0L
     // 0 until loaded: the mic starts at once and the engine loads while the user talks (it is freed when idle)
     @Volatile private var engine = 0L
@@ -53,17 +55,23 @@ class LiveDictation(private val loadEngine: () -> Long, private val dictionary: 
             // normal priority: the bubble's animation must win over reading/drafting (see Engine.load)
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DEFAULT)
             val h = loadEngine()
-            if (h == 0L) return@Thread
-            IvyNative.liveReset(h, dictionary)
-            engine = h
-            while (recording) {
-                if (mic.size < 8000) { Thread.sleep(50); continue }
-                val snap = mic.snapshot()
-                val t = System.nanoTime()
-                if (IvyNative.liveStep(h, snap, snap.size)) {
-                    maxStepMs = maxOf(maxStepMs, (System.nanoTime() - t) / 1_000_000)
-                } else {
-                    Thread.sleep(150)
+            if (h == 0L || cancelled) return@Thread
+            // One dictation at a time in the engine. The bubble is idle again as soon as Cancel is tapped, so the
+            // next dictation can start while the cancelled one's worker is still inside its last step: it waits here
+            // (its microphone is already recording).
+            synchronized(oneAtATime) {
+                if (cancelled) return@Thread
+                IvyNative.liveReset(h, dictionary)
+                engine = h
+                while (recording) {
+                    if (mic.size < 8000) { Thread.sleep(50); continue }
+                    val snap = mic.snapshot()
+                    val t = System.nanoTime()
+                    if (IvyNative.liveStep(h, snap, snap.size)) {
+                        maxStepMs = maxOf(maxStepMs, (System.nanoTime() - t) / 1_000_000)
+                    } else {
+                        Thread.sleep(150)
+                    }
                 }
             }
         }.apply { start() }
@@ -72,11 +80,14 @@ class LiveDictation(private val loadEngine: () -> Long, private val dictionary: 
     /** Mic loudness 0..1 while recording. */
     val level: Float get() = mic.level
 
-    /** Throws the recording away (no text). */
+    /** Throws the recording away (no text). Waits for the worker, and so for an engine load in progress. */
     fun cancel() {
+        cancelled = true
         mic.stop()
-        recording = false
+        // interrupt before the worker is let out of its loop: the next dictation's worker enters the engine only
+        // after this one has left, so this interrupt can never land on the next dictation
         engine.let { if (it != 0L) IvyNative.liveInterrupt(it) }
+        recording = false
         worker?.join()
     }
 
@@ -93,5 +104,9 @@ class LiveDictation(private val loadEngine: () -> Long, private val dictionary: 
         val json = IvyNative.liveFinish(h, pcm, pcm.size)
         val ms = (System.nanoTime() - released) / 1_000_000
         return DictationResult.parse(json, ms, pcm.size / 16000f, maxStepMs)
+    }
+
+    private companion object {
+        val oneAtATime = Any()
     }
 }
