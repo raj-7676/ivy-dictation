@@ -111,7 +111,6 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 Log.w(TAG, "engine not ready: the speech model is not downloaded yet")
                 return false
             }
-            letGo = false // a dictation: the bubble keeps the engine again afterwards (see letGoWhenUnused)
             appName = appLabel(target?.packageName?.toString() ?: appRoot()?.packageName?.toString())
             synchronized(micLock) {
                 micForeground(true)
@@ -415,20 +414,19 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         }
     }
 
-    // A box left open (a chat with the keyboard up) must not hold ~1 GB for ever: after HELD_IDLE_MS without a
-    // dictation the bubble lets go (Engine frees it a minute later). The next dictation loads it again while the
-    // user talks. A dictation in progress keeps its own hold, so nothing is freed under it.
+    // A box left open and not touched (a chat with the keyboard up, the phone put down) must not hold ~1 GB for
+    // ever: after HELD_IDLE_MS without a dictation the bubble lets go (Engine frees it a minute later). Any tap,
+    // scroll or cursor move in the box warms the engine again 2 s later (setShown), so while the box is in use the
+    // engine stays ready and a dictation never waits for a load. That is on purpose (decided 2026-11-10: speed
+    // first while the box is in use; a let-go that held until the next dictation was tried and taken out).
+    // A dictation in progress keeps its own hold, so nothing is freed under it.
     private var heldJob: kotlinx.coroutines.Job? = null
     @Volatile private var lastUsedAt = 0L
-    // True from that let-go until the next dictation or until the bubble goes away. While true the bubble does not
-    // warm the engine: every tap, scroll or cursor move in the open box reaches setShown(true), and warming there
-    // took the engine back 2 s after each let-go, so it was never freed while the box stayed open.
-    private var letGo = false
 
     private suspend fun letGoWhenUnused() {
         while (engineHeld) {
             val wait = HELD_IDLE_MS - (android.os.SystemClock.uptimeMillis() - lastUsedAt)
-            if (wait <= 0) { engineHeld = false; letGo = true; Engine.release(); break }
+            if (wait <= 0) { engineHeld = false; Engine.release(); break }
             delay(wait)
         }
         heldJob = null
@@ -440,7 +438,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         if (show) {
             hideJob?.cancel(); hideJob = null
             if (v.visibility != View.VISIBLE) v.visibility = View.VISIBLE
-            if (!engineHeld && !letGo && warmJob == null) {
+            if (!engineHeld && warmJob == null) {
                 shownAt = android.os.SystemClock.uptimeMillis()
                 warmJob = scope.launch { warmWhenQuiet() }
             }
@@ -449,7 +447,6 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 delay(350); hideJob = null; view?.visibility = View.GONE
                 warmJob?.cancel(); warmJob = null
                 heldJob?.cancel(); heldJob = null
-                letGo = false // the box is gone: the next one warms the engine again
                 if (engineHeld) { engineHeld = false; Engine.release() }
             }
         }

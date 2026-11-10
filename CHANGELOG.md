@@ -10,7 +10,7 @@ All notable changes to Ivy. Downloads are on the [Releases page](https://github.
 - **Long dictations** are split into pieces while you talk (4.4 minutes: about 4 seconds after you let go on the S26).
 - **Smoother bubble** while Ivy is working (the speech engine no longer takes the time the bubble needs to draw).
 - **Nothing you say is lost:** if the speech engine cannot load (for example when the phone is very low on memory), the recording is kept in History and Retry writes it later.
-- **Smaller fixes:** cancelling a dictation and starting a new one right away now works; a text box left open for more than two minutes gives the memory back until you dictate again; a long dictation on a slow or busy phone is still split into pieces.
+- **Smaller fixes:** cancelling a dictation and starting a new one right away now works; a long dictation on a slow or busy phone is still split into pieces.
 
 ## Android 1.0.2 (2026-11-08)
 
