@@ -82,7 +82,7 @@ class EngineLabActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        Lab.unload()
+        Lab.closed()
     }
 }
 
@@ -91,6 +91,24 @@ private object Lab {
     var threads = 0
 
     private var backends = ""
+
+    // A test runs for minutes on a background thread, and the screen can go away meanwhile (Back, or Android
+    // restarting it). Freeing the engine then crashed the app (CMF 2026-11-10: the phone was turned during the speed
+    // test, the screen was restarted, onDestroy freed the engine under the running test: SIGSEGV in a compute thread).
+    // So: one piece of work at a time, and a screen closed during it only asks for the free, done when the work ends.
+    private var working = false
+    private var leave = false
+
+    /** False if a test is still running (also one started by an earlier copy of this screen). */
+    fun begin(): Boolean = synchronized(this) { if (working) false else { working = true; leave = false; true } }
+
+    fun done() = synchronized(this) { working = false; if (leave) { leave = false; unload() } }
+
+    /** The screen is gone: free the engine now, or as soon as the running test ends. */
+    fun closed() = synchronized(this) { if (working) leave = true else unload() }
+
+    /** True once the screen was closed during a test: the test stops after the clip it is on. */
+    val leaving: Boolean get() = synchronized(this) { leave }
 
     fun load(ctx: Context, t: Int): String {
         unload()
@@ -192,10 +210,13 @@ private fun LabScreen(ctx: Context, autorun: Boolean) {
     }
 
     fun run(block: suspend CoroutineScope.() -> Unit) {
-        if (busy) return
+        if (busy || !Lab.begin()) return
         busy = true
-        scope.launch(Dispatchers.Default) {
+        // not this screen's scope: that one is cancelled when the screen goes, and the test (blocking engine calls)
+        // would then never reach Lab.done()
+        CoroutineScope(Dispatchers.Default).launch {
             try { block() } catch (e: Throwable) { say("ERROR: $e") }
+            Lab.done()
             busy = false
         }
     }
@@ -215,10 +236,12 @@ private fun LabScreen(ctx: Context, autorun: Boolean) {
         val clips = loadClips(ctx)
         say("\n=== Speed test, real time (wait = after the clip ends; step = longest piece of work while talking)")
         for (t in listOf(0, 4, 2)) {
+            if (Lab.leaving) break
             threads = t
             if (!ensureEngine()) break
             once(Lab.handle, clips[0].pcm) // warm-up
             for (c in clips) {
+                if (Lab.leaving) break
                 val l = simulateLive(Lab.handle, c.pcm)
                 say("t=${Lab.label(t)} ${"%.0f".format(c.secs)}s: WAIT ${s(l.afterReleaseMs)} " +
                     "(read ${s(l.readMs)} write ${s(l.writeMs)}, ${l.tokens} tok, drafts ${l.drafts}, " +
@@ -258,22 +281,28 @@ private fun LabScreen(ctx: Context, autorun: Boolean) {
                 .background(if (talking) IvyOrange else Color(0xFF2A2433))
                 .pointerInput(busy, threads) {
                     detectTapGestures(onPress = {
-                        if (busy) return@detectTapGestures
-                        val ok = withContext(Dispatchers.Default) { ensureEngine() }
-                        if (!ok) return@detectTapGestures
-                        val d = LiveDictation({ Lab.handle })
-                        live = d
-                        d.start()
-                        talking = true
-                        tryAwaitRelease()
-                        talking = false
-                        val r = withContext(Dispatchers.Default) { d.finish() }
-                        live = null
-                        lastText = r.text
-                        say("TALK ${"%.1f".format(r.audioSecs)}s: after release ${s(r.afterReleaseMs)} (read ${s(r.readMs)} " +
-                            "write ${s(r.writeMs)}, ${r.tokens} tok, windows ${r.windowsReused}+${r.windowsAtEnd}, " +
-                            "drafts ${r.drafts}, kept ${r.accepted}/${r.proposed}, longest step ${s(r.maxWindowMs)})" +
-                            "${if (r.note.isNotEmpty()) " note: ${r.note}" else ""}\n  > ${r.text}")
+                        if (busy || !Lab.begin()) return@detectTapGestures
+                        var d: LiveDictation? = null
+                        try {
+                            val ok = withContext(Dispatchers.Default) { ensureEngine() }
+                            if (!ok) return@detectTapGestures
+                            d = LiveDictation({ Lab.handle }).also { live = it; it.start() }
+                            talking = true
+                            tryAwaitRelease()
+                            talking = false
+                            val r = withContext(Dispatchers.Default) { d.finish() }
+                            d = null
+                            live = null
+                            lastText = r.text
+                            say("TALK ${"%.1f".format(r.audioSecs)}s: after release ${s(r.afterReleaseMs)} (read ${s(r.readMs)} " +
+                                "write ${s(r.writeMs)}, ${r.tokens} tok, windows ${r.windowsReused}+${r.windowsAtEnd}, " +
+                                "drafts ${r.drafts}, kept ${r.accepted}/${r.proposed}, longest step ${s(r.maxWindowMs)})" +
+                                "${if (r.note.isNotEmpty()) " note: ${r.note}" else ""}\n  > ${r.text}")
+                        } finally {
+                            // the screen went away mid-talk: stop the microphone and the worker before the engine may go
+                            d?.let { runCatching { it.cancel() } }
+                            Lab.done()
+                        }
                     })
                 },
             contentAlignment = Alignment.Center

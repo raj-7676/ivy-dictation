@@ -42,11 +42,15 @@
             </intent-filter>
         </activity>
         <!-- Phone engine test screen: no launcher icon; open with
-             adb shell am start -n com.glowco.ivy/com.example.lab.EngineLabActivity -->
+             adb shell am start -n com.glowco.ivy/com.example.lab.EngineLabActivity
+             Portrait only and no restart on rotation or other screen changes, like MainActivity: a restart in the
+             middle of its speed test used to free the engine under the test (crash, CMF 2026-11-10). -->
         <activity
             android:name=".lab.EngineLabActivity"
             android:exported="true"
             android:label="Ivy Engine Lab"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|fontScale|uiMode"
             android:theme="@style/Theme.MyApplication" />
         <!-- Downloads the models in the background (setup wizard) -->
         <service
