@@ -143,7 +143,8 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                     d.lastAudio?.takeIf { it.size >= 8000 }?.let { pcm ->
                         val now = System.currentTimeMillis()
                         AudioFiles.save(this@IvyAccessibilityService, pcm, now)?.let { audio ->
-                            IvyStore.addDictation(NOT_WRITTEN, appName, pcm.size / 16L, audio, now)
+                            // not counted: the words of this notice and the time spoken must not change the Home stats
+                            IvyStore.addDictation(NOT_WRITTEN, appName, pcm.size / 16L, audio, now, counted = false)
                         }
                     }
                 }

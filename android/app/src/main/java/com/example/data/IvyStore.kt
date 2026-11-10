@@ -53,15 +53,17 @@ object IvyStore {
         app?.let { ctx -> gone.forEach { AudioFiles.delete(ctx, it.audio) } }
     }
 
+    /** [counted] = false: a recording kept without its text (it could not be written): History only, the Home stats stay. */
     @Synchronized
-    fun addDictation(text: String, appName: String, durationMs: Long, audio: String?, at: Long = System.currentTimeMillis()) {
+    fun addDictation(text: String, appName: String, durationMs: Long, audio: String?, at: Long = System.currentTimeMillis(), counted: Boolean = true) {
         val d = Dictation(UUID.randomUUID().toString(), text, appName, durationMs, at, audio)
         update(_state.value.let {
             val day = java.time.Instant.ofEpochMilli(at).atZone(zone).toLocalDate().toEpochDay()
             val lt = it.lifetime
             it.copy(
                 dictations = listOf(d) + it.dictations,
-                lifetime = Lifetime(lt.words + Rules.words(text), lt.ms + durationMs, if (day in lt.days) lt.days else (lt.days + day).sorted()),
+                lifetime = if (!counted) lt else
+                    Lifetime(lt.words + Rules.words(text), lt.ms + durationMs, if (day in lt.days) lt.days else (lt.days + day).sorted()),
             )
         })
         purge(at)
