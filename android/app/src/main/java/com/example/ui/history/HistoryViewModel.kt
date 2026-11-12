@@ -169,7 +169,7 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 Engine.release()
             }
-            val final = text?.let { Rules.applySnippets(it, IvyStore.state.value.snippets) }
+            val final = text?.let { Rules.applySnippets(com.example.data.TextClean.afterModel(it), IvyStore.state.value.snippets) }
             if (!final.isNullOrBlank()) IvyStore.replaceText(item.id, final)
             set { it.copy(retryingId = null, toastMessage = if (final.isNullOrBlank()) "Couldn't write it again" else "Updated") }
         }

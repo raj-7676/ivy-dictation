@@ -13,6 +13,9 @@ object TextClean {
     private val discourse = Regex("""(?i)\s*,\s*(?:you know|i mean|like|basically|actually|kind of|sort of|right)\s*(?=[,.!?])""")
     private val discourseStart = Regex("""(?i)^\s*(?:like|you know|i mean|basically)\s*,\s*""")
 
+    /** Every dictation and every History retry goes through this once: fillers out, then numbers as digits. */
+    fun afterModel(text: String): String = Numbers.apply(fillers(text).trim())
+
     fun fillers(text: String): String {
         if (!filler.containsMatchIn(text) && !discourse.containsMatchIn(text) && !discourseStart.containsMatchIn(text)) return text
         var out = discourseStart.replace(discourse.replace(text, ""), "")

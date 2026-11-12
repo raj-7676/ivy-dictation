@@ -425,7 +425,7 @@ fun BubbleMenuItem(
 @Composable
 private fun ToneSlider(state: BubbleState) {
     val stops = state.toneStops
-    val stopW = 74.dp
+    val stopW = 64.dp // 74 was wider than the words need (Yash, 2026-11-12); labels 11.5 sp so "Grammar" keeps air in the knob
     val pad = 4.dp
     val density = androidx.compose.ui.platform.LocalDensity.current
     val stopPx = with(density) { stopW.toPx() }
@@ -469,7 +469,7 @@ private fun ToneSlider(state: BubbleState) {
                 Modifier.offset(x = pad + stopW * i).width(stopW).fillMaxHeight()
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { if (i != state.toneLevel) state.onTone?.invoke(i) },
                 contentAlignment = Alignment.Center
-            ) { Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = TextSecondary) }
+            ) { Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 11.5.sp, color = TextSecondary) }
         }
         // knob
         Box(
@@ -482,7 +482,7 @@ private fun ToneSlider(state: BubbleState) {
             contentAlignment = Alignment.Center
         ) {
             val nearest = ((knobX - with(density) { pad.toPx() } + stopPx / 2) / stopPx).toInt().coerceIn(0, stops.size - 1)
-            Text(stops[nearest], fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF1B0D04))
+            Text(stops[nearest], fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 11.5.sp, color = Color(0xFF1B0D04))
         }
     }
 }
@@ -512,24 +512,21 @@ private fun RecordingPill(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Cancel: throws the recording away
-        Row(
+        // Cancel: throws the recording away. Only the X, the same size as Done, so the pill stays short (Yash, 2026-11-12).
+        Box(
             modifier = Modifier
-                .height(34.dp)
-                .clip(RoundedCornerShape(17.dp))
+                .size(34.dp)
+                .clip(CircleShape)
                 .background(Color.White.copy(alpha = 0.10f))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = ripple(color = Color.White),
                     onClick = onCancel
                 )
-                .padding(horizontal = 10.dp)
                 .testTag("bubble_cancel_button"),
-            verticalAlignment = Alignment.CenterVertically
+            contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Default.Close, contentDescription = "Cancel Dictation", tint = TextPrimary, modifier = Modifier.size(15.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("Cancel", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = TextPrimary)
+            Icon(Icons.Default.Close, contentDescription = "Cancel Dictation", tint = TextPrimary, modifier = Modifier.size(17.dp))
         }
 
         WaveformDisplay(

@@ -107,6 +107,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     private val engine = object : BubbleEngine {
         override fun start(): Boolean {
             if (!Permissions.mic(this@IvyAccessibilityService)) return false
+            if (secretBox()) return false // password / number / phone box: never listen (the bubble is hidden there anyway)
             if (!ModelStore.ready(this@IvyAccessibilityService)) {
                 Log.w(TAG, "engine not ready: the speech model is not downloaded yet")
                 return false
@@ -126,9 +127,9 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
             return try {
                 val r = d.finish()
                 Log.i(TAG, "dictation ${r.audioSecs}s, ${r.afterReleaseMs} ms after release (read ${r.readMs}, write ${r.writeMs}, ${r.tokens} tok, windows ${r.windowsReused} reused/${r.windowsAtEnd} at end, drafts ${r.drafts} kept ${r.accepted}/${r.proposed}, slowest step ${r.maxWindowMs} ms), note '${r.note}'")
-                // um / uh / er are removed from every dictation; snippets are applied last, as on the desktop
+                // um / uh / er are removed and numbers become digits in every dictation; snippets are applied last, as on the desktop
                 if (appName == "App") appName = appLabel(appRoot()?.packageName?.toString())
-                val text = Rules.applySnippets(TextClean.fillers(r.text).trim(), IvyStore.state.value.snippets)
+                val text = Rules.applySnippets(TextClean.afterModel(r.text), IvyStore.state.value.snippets)
                 if (text.isNotBlank()) {
                     val now = System.currentTimeMillis()
                     val audio = d.lastAudio?.let { AudioFiles.save(this@IvyAccessibilityService, it, now) }
@@ -286,12 +287,12 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // the user is typing (see warmWhenQuiet). Some boxes (Google search) report only text changes, others only
         // the moving cursor. A text change needs nothing else: return before the window scan, so typing stays cheap.
-        if (event?.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) { typedAt = android.os.SystemClock.uptimeMillis(); return }
-        if (event?.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED) typedAt = android.os.SystemClock.uptimeMillis()
-        if (event != null && bubble.toneVisible && !bubble.toneBusy && event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED &&
-            System.currentTimeMillis() - ownEditAt > 1200 && System.currentTimeMillis() - lastToneAt > 1200) {
-            bubble.toneVisible = false; Log.i(TAG, "tone slider hide (user touched the text)")
-        }
+        val type = event?.eventType
+        // the slider's text may have been deleted, changed, or left behind in another box
+        if (bubble.toneVisible && (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED ||
+                type == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED || type == AccessibilityEvent.TYPE_VIEW_FOCUSED)) checkTone()
+        if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) { typedAt = android.os.SystemClock.uptimeMillis(); return }
+        if (type == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED) typedAt = android.os.SystemClock.uptimeMillis()
         // while recording / writing the bubble stays up anyway; skip the window scans so the engine has the phone to itself
         if (view != null && bubble.mode == BubbleMode.IDLE) refresh()
     }
@@ -383,7 +384,8 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         val raw = try { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) } catch (_: Throwable) { null }
         val other = pkg != packageName
         val keyboardOk = !prefs.getBoolean("keyboard_only", true) || kb
-        val fieldOk = box != null || (raw == null || !sensitive(raw))
+        // secretBox: what the app told the keyboard. It also catches password boxes that show no usable node (web pages).
+        val fieldOk = !secretBox() && (box != null || raw == null || !sensitive(raw))
         val here = keyboardOk && fieldOk && other && (box != null || kb)
         // the text box is gone (Go / Search pressed, keyboard closed, app left): the controls for that text go too
         if (!here && bubble.toneVisible && bubble.mode == BubbleMode.IDLE && !bubble.toneBusy) { bubble.toneVisible = false; Log.i(TAG, "tone slider hide (box gone)") }
@@ -492,15 +494,35 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         return false
     }
 
+    // Android 13+: typed through the keyboard's own channel (KeyboardLine). Older phones use the box actions below.
+    private fun keyboardType(text: String) = Build.VERSION.SDK_INT >= 33 && KeyboardLine.type(this, text)
+    private fun secretBox() = Build.VERSION.SDK_INT >= 33 && KeyboardLine.secret(this)
+
+    // A box that opens its keyboard connection is checked at once (a password box hides the bubble before a tap can reach it).
+    @androidx.annotation.RequiresApi(33)
+    override fun onCreateInputMethod(): android.accessibilityservice.InputMethod =
+        IvyInputMethod(this) {
+            if (bubble.toneVisible) checkTone(150) // another box took the keyboard: the old text's slider goes
+            if (view != null && bubble.mode == BubbleMode.IDLE) refresh()
+        }
+    private fun keyboardSwap(from: String, to: String) = Build.VERSION.SDK_INT >= 33 && KeyboardLine.swap(this, from, to)
+
+    @Volatile private var clipUsed = false
+
     /** Puts the text where the cursor is in the focused box; clipboard + "Copied" pill if the box won't take it. */
     private fun type(text: String) {
+        // the cursor moved into a password / number box while Ivy was listening: never typed there, kept on the
+        // clipboard with the "Copied" pill instead (what Wispr Flow does for a sensitive field)
+        if (secretBox()) { Log.i(TAG, "type: sensitive box, copied instead"); copy(text); bubble.triggerFallbackState(BubbleMode.FALLBACK_COPIED); return }
         val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         val old = runCatching { cm.primaryClip }.getOrNull()
+        clipUsed = false
         scope.launch {
             // the paste attempts wait a little between steps: never on the main thread, or the pills would stutter
             val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { typeInto(text) }
             if (ok) {
                 offerTone(text)
+                if (!clipUsed) return@launch // typed like a keyboard: the clipboard was never touched
                 // pasted: give the user's own clipboard back (the paste reads it asynchronously, so wait a moment)
                 delay(600)
                 runCatching { if (old != null) cm.setPrimaryClip(old) else if (Build.VERSION.SDK_INT >= 28) cm.clearPrimaryClip() }
@@ -512,6 +534,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
 
     /** True if the text went into a box; false if it is left on the clipboard ("Copied" pill). */
     private fun typeInto(text: String): Boolean {
+        if (keyboardType(text)) return true
         val node = findField() ?: target?.takeIf { it.refresh() && it.isEditable }
         Log.i(TAG, "type: node=${node?.className} editable=${node?.isEditable} pkg=${appRoot()?.packageName}")
         if (node != null && insert(node, text)) return true
@@ -533,14 +556,34 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
 
     // ---- Tone slider: Original | Grammar | Formal (nothing runs unless the user moves it) ----
 
-    private var toneJob: kotlinx.coroutines.Job? = null
+    // No timeout (Yash, 2026-11-12): the slider belongs to its text and stays while that text is in the open box,
+    // also while the user types on or moves the cursor. It goes when the box goes (refresh), when another box is
+    // opened or the text is deleted or changed by hand (checkTone), and when the next recording starts.
+    private var toneCheck: kotlinx.coroutines.Job? = null
+
+    /** Asked a moment after things settle, never once per key press. */
+    private fun checkTone(waitMs: Long = 400) {
+        toneCheck?.cancel()
+        toneCheck = scope.launch {
+            delay(waitMs)
+            // Ivy's own typing and swaps settle first (Samsung Notes shows a change late)
+            while (bubble.toneBusy || System.currentTimeMillis() - maxOf(ownEditAt, lastToneAt) < 1200) delay(300)
+            if (!bubble.toneVisible) return@launch
+            val text = tones[bubble.toneLevel] ?: tones[0] ?: return@launch
+            val here = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { textInBox(text) }
+            if (!here && bubble.toneVisible && !bubble.toneBusy) {
+                bubble.toneVisible = false; Log.i(TAG, "tone slider hide (its text is not in this box)")
+            }
+        }
+    }
+
+    /** True also when the box cannot be read at all: then only the box going away hides the slider. */
+    private fun textInBox(text: String): Boolean {
+        if (Build.VERSION.SDK_INT >= 33) KeyboardLine.has(this, text)?.let { return it }
+        return findField()?.text?.toString()?.contains(text) ?: true
+    }
     private val tones = arrayOfNulls<String>(3) // the three versions of the last dictation (made on first use)
     private var toneHasModel = false
-
-    private fun keepToneAlive() {
-        toneJob?.cancel()
-        toneJob = scope.launch { delay(6000); bubble.toneVisible = false; Log.i(TAG, "tone slider hide (6 s)") }
-    }
 
     private var lastToneAt = 0L
     private var ownEditAt = 0L
@@ -561,7 +604,6 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         bubble.onTone = ::moveTone
         bubble.toneVisible = true
         Log.i(TAG, "tone slider show (${bubble.toneStops.size} stops)")
-        keepToneAlive()
     }
 
     /** "Polish last" from the tap menu: brings the slider back for the newest dictation, if its text is still there. */
@@ -572,7 +614,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 (listOfNotNull(findField()) + candidates().filter { it.isEditable }).any { it.text?.toString()?.contains(cur) == true }
             }
             if (!found) { bubble.polishReady = false; bubble.triggerFallbackState(BubbleMode.FALLBACK_NOTHING_TO_FIX); return@launch }
-            bubble.toneVisible = true; keepToneAlive()
+            bubble.toneVisible = true
         }
     }
 
@@ -605,7 +647,6 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         val from = bubble.toneLevel
         bubble.toneBusy = true
         bubble.toneLevel = target // the knob glides at once; the text follows
-        toneJob?.cancel()
         scope.launch {
             val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 tones[target] ?: when (target) {
@@ -614,12 +655,12 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 }.also { tones[target] = it }
             }
             if (text == null) { // the model gave nothing: go back
-                bubble.toneLevel = from; bubble.toneBusy = false; keepToneAlive()
+                bubble.toneLevel = from; bubble.toneBusy = false
                 bubble.triggerFallbackState(BubbleMode.FALLBACK_NOTHING_TO_FIX); return@launch
             }
             Log.i(TAG, "tone text for $target: ${if (text == null) "none" else "${text.length} chars"}")
             if (target == 1 && text == tones[0] && from == 0) { // grammar found nothing to change
-                bubble.toneLevel = 0; bubble.toneBusy = false; keepToneAlive()
+                bubble.toneLevel = 0; bubble.toneBusy = false
                 bubble.triggerFallbackState(BubbleMode.FALLBACK_NOTHING_TO_FIX); return@launch
             }
             val now = tones[from] ?: tones[0]!!
@@ -633,12 +674,12 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 copy(text); bubble.triggerFallbackState(BubbleMode.FALLBACK_COPIED); return@launch
             }
             if (text == tones[0] && target != 0) tones[target] = text
-            keepToneAlive()
         }
     }
 
     /** Replaces the last [from] in the focused box with [to], cursor after it. False if [from] isn't there now. */
     private fun swap(from: String, to: String): Boolean {
+        if (keyboardSwap(from, to)) return true
         // Samsung Notes & co. report no focused field: look through every editable box for the one holding the text
         val nodes = listOfNotNull(findField(), target?.takeIf { it.refresh() && it.isEditable }) + candidates().filter { it.isEditable && !sensitive(it) }
         for (node in nodes) {
@@ -699,6 +740,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     }
 
     private fun copy(text: String) {
+        clipUsed = true
         val clip = ClipData.newPlainText("Ivy", text)
         // Android 13+: don't show the "Copied" preview of what was dictated
         clip.description.extras = android.os.PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE", true) }
