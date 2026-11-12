@@ -2,8 +2,11 @@
 
 All notable changes to Ivy. Downloads are on the [Releases page](https://github.com/raj-7676/ivy-dictation/releases).
 
-## Android 1.0.3 (2026-11-10)
+## Android 1.0.3 (2026-11-12)
 
+- **Types in every app (Android 13 and newer).** Ivy now types like a keyboard, at the cursor, without touching your clipboard. Search boxes that only got "Copied, tap to paste" before (Swiggy, Zomato, Blinkit and others) now get the text. In password, PIN, number and phone boxes the bubble stays hidden and Ivy does not listen.
+- **Numbers as digits.** "ten thousand rupees" becomes ₹10000, "six hundred plus five hundred" becomes 600 + 500, "seven thirty pm" becomes 7:30 PM, "twenty percent" becomes 20%, "march twenty first" becomes March 21st. Big round amounts keep the word: "five billion dollars" becomes $5 billion.
+- **The tone slider (Original, Grammar, Formal) no longer disappears after 6 seconds.** It stays while your text is in the box, also after you type more, and goes when you move to another box. It is narrower, and the recording pill has an X instead of the word Cancel.
 - **Faster, and it no longer gets stuck when other apps keep the phone busy.** Ivy now times its engine on your own phone the first time it starts and uses the fastest version for your CPU. On a Galaxy S26 Ultra a 60-second dictation now appears 2 to 4 seconds after you let go (it was 4 to 6). When other apps are busy, Ivy notices that its threads are waiting for the processor and uses fewer of them until the phone is free again. Before, one busy background app could make a 60-second dictation take over a minute to appear.
 - **Grammar and Formal** adapt to a busy phone the same way.
 - **Uses almost no memory while you are not dictating:** Ivy loads when a text box opens and lets go a minute after you finish (on a CMF Phone 1, from 2.35 GB to about 50 MB when idle).
