@@ -2,6 +2,10 @@
 
 All notable changes to Ivy. Downloads are on the [Releases page](https://github.com/raj-7676/ivy-dictation/releases).
 
+## Android 1.0.4 (2026-11-16)
+
+- **Drag the bubble onto the X to close Ivy for that text box.** While you drag the bubble, an X appears at the bottom middle of the screen. Near it, the bubble is pulled onto the X; let go there and Ivy goes away for that box and frees its memory. It comes back when you tap into another text box, or once the keyboard closes or you leave the app. Same as Wispr Flow.
+
 ## Android 1.0.3 (2026-11-12)
 
 - **Types in every app (Android 13 and newer).** Ivy now types like a keyboard, at the cursor, without touching your clipboard. Search boxes that only got "Copied, tap to paste" before (Swiggy, Zomato, Blinkit and others) now get the text. In password, PIN, number and phone boxes the bubble stays hidden and Ivy does not listen.
