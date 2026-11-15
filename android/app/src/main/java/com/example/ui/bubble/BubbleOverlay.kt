@@ -254,7 +254,7 @@ fun BubbleOverlay(
             Box(
                 modifier = Modifier
                     .pointerInput(state.mode) {
-                        detectDragGestures(onDragEnd = { state.onDragEnd?.invoke() }) { change, dragAmount ->
+                        detectDragGestures(onDragEnd = { state.onDragEnd?.invoke() }, onDragCancel = { state.onDragEnd?.invoke() }) { change, dragAmount ->
                             change.consume()
                             state.dragOffset = Offset(
                                 x = (state.dragOffset.x + dragAmount.x).coerceIn(-240f, 240f),
@@ -396,6 +396,32 @@ private fun IdleBubble(
 }
 
 const val HOLD_TO_RECORD_MS = 500L
+
+/** The X at the bottom middle while the bubble is dragged: drop the bubble on it to close Ivy for this text box. */
+@Composable
+fun DismissTarget(shown: Boolean, hot: Boolean, sizeDp: Int) {
+    val grow by androidx.compose.animation.core.animateFloatAsState(
+        if (hot) 1.25f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 500f), label = "x-grow"
+    )
+    val fill by animateColorAsState(if (hot) IvyOrange else IvyNearBlack.copy(alpha = 0.9f), tween(150), label = "x-fill")
+    AnimatedVisibility(
+        visible = shown,
+        enter = fadeIn(tween(160)) + androidx.compose.animation.scaleIn(tween(200, easing = FastOutSlowInEasing), initialScale = 0.6f),
+        exit = fadeOut(tween(140)) + androidx.compose.animation.scaleOut(tween(160), targetScale = 0.6f)
+    ) {
+        Box(
+            Modifier
+                .size(sizeDp.dp)
+                .graphicsLayer { scaleX = grow; scaleY = grow }
+                .clip(CircleShape)
+                .background(fill)
+                .border(1.2.dp, if (hot) IvyOrange else GlassBorder, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.Close, contentDescription = "Close Ivy here", tint = if (hot) Color(0xFF1B0D04) else TextPrimary, modifier = Modifier.size(24.dp))
+        }
+    }
+}
 
 @Composable
 fun BubbleMenuItem(

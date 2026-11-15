@@ -51,6 +51,7 @@ import com.example.ui.bubble.BubbleSize
 import com.example.ui.bubble.BubbleMode
 import com.example.ui.bubble.BubbleOverlay
 import com.example.ui.bubble.BubbleState
+import com.example.ui.bubble.DismissTarget
 import com.example.ui.theme.IvyTheme
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -200,7 +201,15 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         }
         dock(if (prefs.getBoolean("bubble_left", false)) BubbleDockSide.LEFT else BubbleDockSide.RIGHT)
         // Let go: snap to the nearer side (never left floating mid-screen), like Wispr Flow's bubble.
-        bubble.onDragEnd = {
+        bubble.onDragEnd = onDragEnd@{
+            val wasHot = xHot
+            xShown = false; xHot = false; dragging = false
+            snapJob?.cancel(); snapJob = null
+            xView?.let { xv -> scope.launch { delay(200); if (!xShown) xv.visibility = View.GONE } }
+            if (wasHot && bubble.mode == BubbleMode.IDLE) { closeForThisBox(); return@onDragEnd }
+            // the drag may go down to the X; a bubble left anywhere else goes back into its usual band
+            val h = resources.displayMetrics.heightPixels
+            applyTopY(topY().coerceIn(h / 10, h * 8 / 10))
             val w = resources.displayMetrics.widthPixels
             val vw = view?.width ?: 0
             val fromLeft = if (bubble.dockSide == BubbleDockSide.LEFT) params.x else w - params.x - vw
@@ -234,6 +243,28 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         params.windowAnimations = 0
         // never let the keyboard push or pan the bubble window (it used to drop to the bottom, then jump back, as the keyboard opened)
         params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING or WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED
+        // The X target sits under the bubble window; it never takes touches (the drag stays with the bubble).
+        xView = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@IvyAccessibilityService)
+            setViewTreeSavedStateRegistryOwner(this@IvyAccessibilityService)
+            setContent {
+                IvyTheme {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { DismissTarget(xShown, xHot, X_SIZE) }
+                }
+            }
+            visibility = View.GONE
+        }
+        val dm0 = resources.displayMetrics
+        wm.addView(xView, WindowManager.LayoutParams(
+            (X_BOX * dm0.density).toInt(), (X_BOX * dm0.density).toInt(),
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = ((X_BOTTOM - (X_BOX - X_SIZE) / 2) * dm0.density).toInt()
+            windowAnimations = 0
+        })
         wm.addView(v, params)
         view = v
         applySettings()
@@ -246,10 +277,49 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 val w = resources.displayMetrics.widthPixels
                 // x counts from the docked edge, so on the right side moving left makes it bigger
                 val dx = if (bubble.dockSide == BubbleDockSide.LEFT) o.x.toInt() else -o.x.toInt()
-                params.x = (params.x + dx).coerceIn(0, w - (view?.width ?: 0))
-                applyTopY((topY() + o.y.toInt()).coerceIn(h / 10, h * 8 / 10))
+                val vw = view?.width ?: params.width
+                // The finger's place (free*) is tracked apart from the window: while the X pulls the bubble in, the
+                // window sits on the X, and pulling out puts it back under the finger.
+                if (!dragging) { dragging = true; freeX = params.x; freeY = params.y }
+                freeX = (freeX + dx).coerceIn(0, w - vw)
+                // down to the screen bottom while dragging (to reach the X); onDragEnd puts it back in its band
+                freeY = (freeY - o.y.toInt()).coerceIn(0, (h - h / 10 - winPx()).toInt())
                 bubble.dragOffset = Offset.Zero
-                view?.let { wm.updateViewLayout(it, params) }
+                var hot = false
+                if (bubble.mode == BubbleMode.IDLE) {
+                    if (!xShown) { xView?.visibility = View.VISIBLE; xShown = true }
+                    // both centres measured from the bottom and the left of the screen (the windows hang from the bottom)
+                    val d = resources.displayMetrics.density
+                    val bx = if (bubble.dockSide == BubbleDockSide.LEFT) freeX + vw / 2f else w - freeX - vw / 2f
+                    val by = freeY + bubble.bubbleSize.diameterDp.value * d / 2f
+                    // a wider ring to leave than to enter, so the bubble doesn't flick in and out at the edge
+                    val reach = (if (xHot) X_HOT * 1.4f else X_HOT.toFloat()) * d
+                    hot = Math.hypot((bx - w / 2f).toDouble(), (by - (X_BOTTOM + X_SIZE / 2f) * d).toDouble()) < reach
+                    if (hot && !xHot) xView?.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                }
+                if (hot) {
+                    if (!xHot) { // pulled in: glide onto the X centre
+                        val d = resources.displayMetrics.density
+                        val tx = (w - vw) / 2
+                        val ty = ((X_BOTTOM + X_SIZE / 2f - bubble.bubbleSize.diameterDp.value / 2f) * d).toInt()
+                        snapJob?.cancel()
+                        snapJob = scope.launch {
+                            val sx = params.x; val sy = params.y
+                            for (i in 1..SNAP_FRAMES) {
+                                val t = i.toFloat() / SNAP_FRAMES
+                                val e = 1f - (1f - t) * (1f - t) // ease out
+                                params.x = (sx + (tx - sx) * e).toInt(); params.y = (sy + (ty - sy) * e).toInt()
+                                view?.let { wm.updateViewLayout(it, params) }
+                                delay(16)
+                            }
+                        }
+                    }
+                } else {
+                    snapJob?.cancel(); snapJob = null
+                    params.x = freeX; params.y = freeY
+                    view?.let { wm.updateViewLayout(it, params) }
+                }
+                xHot = hot
             }
         }
         // Stay visible while busy even if the text box lost focus; hide again once idle. The wide window shrinks
@@ -387,9 +457,46 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         // secretBox: what the app told the keyboard. It also catches password boxes that show no usable node (web pages).
         val fieldOk = !secretBox() && (box != null || raw == null || !sensitive(raw))
         val here = keyboardOk && fieldOk && other && (box != null || kb)
+        // Closed with the X: stays away in that box. Back when another box takes focus, or once the box is gone
+        // (keyboard closed, app left) for longer than a focus flicker.
+        if (closedHere) {
+            if (here) {
+                reopenJob?.cancel(); reopenJob = null
+                if (closedBox != null && raw != null && raw != closedBox) { closedHere = false; closedBox = null }
+            } else if (reopenJob == null) {
+                reopenJob = scope.launch { delay(350); closedHere = false; closedBox = null; reopenJob = null }
+            }
+            if (closedHere) { setShown(busy); return }
+        }
         // the text box is gone (Go / Search pressed, keyboard closed, app left): the controls for that text go too
         if (!here && bubble.toneVisible && bubble.mode == BubbleMode.IDLE && !bubble.toneBusy) { bubble.toneVisible = false; Log.i(TAG, "tone slider hide (box gone)") }
         setShown(here || busy || bubble.toneVisible)
+    }
+
+    // ---- Drag to the X: Ivy closes for this text box (like Wispr Flow) ----
+    private var xView: ComposeView? = null
+    private var xShown by mutableStateOf(false)
+    private var xHot by mutableStateOf(false)
+    private var closedHere = false
+    private var closedBox: AccessibilityNodeInfo? = null // null when the app shows no box node (Samsung Notes, web pages)
+    private var reopenJob: kotlinx.coroutines.Job? = null
+    private var dragging = false
+    private var freeX = 0
+    private var freeY = 0
+    private var snapJob: kotlinx.coroutines.Job? = null
+
+    private fun closeForThisBox() {
+        closedHere = true
+        closedBox = try { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) } catch (_: Throwable) { null }
+        reopenJob?.cancel(); reopenJob = null
+        bubble.menuOpen = false; bubble.toneVisible = false; bubble.chip = null; bubble.chip2 = null
+        // back to where it was before this drag (the saved place), ready for the next box
+        val h = resources.displayMetrics.heightPixels
+        applyTopY(prefs.getInt("bubble_y", (h * 0.42f).toInt()).coerceIn(h / 10, h * 8 / 10))
+        dock(if (prefs.getBoolean("bubble_left", false)) BubbleDockSide.LEFT else BubbleDockSide.RIGHT)
+        setShown(false) // frees the engine too, as when the box closes
+        view?.visibility = View.GONE
+        Log.i(TAG, "closed with the X for this box (node ${closedBox != null})")
     }
 
     private var hideJob: kotlinx.coroutines.Job? = null
@@ -790,6 +897,8 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         if (engineHeld) { engineHeld = false; Engine.release() }
         view?.let { wm.removeView(it) }
         view = null
+        xView?.let { wm.removeView(it) }
+        xView = null
         scope.cancel()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         super.onDestroy()
@@ -809,5 +918,10 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         const val NOT_WRITTEN = "Couldn't write this one. Tap Retry to try again."
         const val CHIP2_H = 162 // dp: bubble + both chips ("Fix grammar" above "Make it professional?")
         const val CHIP_H = 112 // dp: bubble + the "Make it professional?" / "Undo" chip
+        const val X_SIZE = 56   // dp: the X circle
+        const val X_BOX = 90    // dp: its window (room to grow when the bubble is over it)
+        const val X_BOTTOM = 40 // dp: from the bottom of the screen to the X circle
+        const val X_HOT = 64    // dp: bubble centre this close to the X centre = pulled in; drop closes Ivy
+        const val SNAP_FRAMES = 8 // ~130 ms glide onto the X
     }
 }
