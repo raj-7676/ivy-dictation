@@ -16,6 +16,8 @@ Website: **[raj-7676.github.io/ivy-dictation](https://raj-7676.github.io/ivy-dic
 
 **[Download Ivy for Android (APK)](https://github.com/raj-7676/ivy-dictation/releases/download/android-v1.0.5-64bit/Ivy-Dictation-1.0.5.apk)** ([details](android/README.md)): about 22 MB; it downloads its speech model (1.5 GB) once on first start, then works with no internet.
 
+Phone runs 32-bit Android (for example Galaxy M13)? Try the [32-bit experimental APK](https://github.com/raj-7676/ivy-dictation/releases/download/android-v1.0.5-32bit/Ivy-Dictation-1.0.5-32bit-experimental.apk). It might not work properly.
+
 ![Ivy turning "um, send it Tuesday, no wait, Thursday at 3" into "Send it Thursday at 3 PM."](docs/ivy-teaser.webp)
 
 ![Ivy's main window](docs/ivy-main.png)
