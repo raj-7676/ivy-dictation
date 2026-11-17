@@ -61,4 +61,60 @@ class TextCleanTest {
         assertEquals(true, TextClean.keptAll(m.text, m))
         assertEquals(false, TextClean.keptAll("i dont like it", m))
     }
+
+    @Test fun agreementDoes() {
+        val cases = listOf(
+            "they was late again." to "They were late again.",
+            "I has a meeting and he dont know the time." to "I have a meeting and he doesn't know the time.",
+            "we needs to train it again." to "We need to train it again.",
+            "he have finished but he didn't sent it." to "He has finished but he didn't send it.",
+            "I didn't knew that." to "I didn't know that.",
+            "can you sends me the file?" to "Can you send me the file?",
+            "the app crash when it start, but it work later." to "The app crash when it starts, but it works later.",
+            "Rahul said he want the slides, so we always goes early." to "Rahul said he wants the slides, so we always go early.",
+            "there is many people here." to "There are many people here.",
+            "she said me that she will come." to "She told me that she will come.",
+            "I am agree with you." to "I agree with you.",
+            "we discussed about the plan." to "We discussed the plan.",
+            "he is working there since two years." to "He is working there for two years.",
+            "I have to went home. He will called you." to "I have to go home. He will call you.",
+            "if you was there, she do it." to "If you were there, she does it.",
+            "the kids was playing and my glasses was broken." to "The kids were playing and my glasses were broken.",
+            "my brother works at glow.co since 5 years." to "My brother works at glow.co for 5 years.",
+        )
+        for ((input, want) in cases) assertEquals(input, want, TextClean.grammar(input))
+    }
+
+    @Test fun agreementMustNotTouch() {
+        for (s in listOf(
+            "Does he have the keys?", "Let it go.", "Make it work.", "I think it was fine.", "Did you see it?",
+            "He will have sent it by then.", "I used to work there.", "Next to the station.", "We were there.",
+            "They know it.", "She knows it.", "Do you got a minute?", "There's a lot of work.", "It was there two days ago.",
+            "I'm here since 5 pm.", "If I were you, I would go.", "The kids want it.", "You know what I mean.",
+            "Thank you so much.", "He said it twice.", "I left it at home.", "We found it.", "I saw him.",
+            "Will she go?", "Why does he need it?", "I know it like the back of my hand.", "Did they go?", "Can he come?", "The boss was late.", "The bus was late.", "The news was bad.",
+            "The analysis was done.", "The canvas was white.", "Open google.com now.", "It costs 3.5 lakhs.",
+        )) assertEquals(s, s, TextClean.grammar(s))
+    }
+
+    @Test fun agreementIsIdempotent() {
+        val once = TextClean.grammar("they was late and he have the file, we needs it")
+        assertEquals(once, TextClean.grammar(once))
+    }
+
+    @Test fun formalBook() {
+        val f = { s: String -> TextClean.tidy(TextClean.formal(s)) }
+        assertEquals("I am going to send it, I do not think it is late.", f("I'm gonna send it, I don't think it's late."))
+        assertEquals("It has been a week and she has got the files.", f("It's been a week and she's got the files."))
+        assertEquals("Yes, we cannot make it. Thank you for waiting.", f("Yeah, we can't make it! Thanks for waiting."))
+        assertEquals("The plan works. We ship Friday.", f("Honestly, the plan works. Basically, we ship Friday."))
+        assertEquals("I would like that, I had been waiting.", f("I'd like that, I'd been waiting."))
+        assertEquals("By the way send it as soon as possible", f("btw send it asap"))
+        assertEquals("Do not worry", f("Don’t worry"))
+        assertEquals("Really?", f("Really?!"))
+        for (s in listOf("I like it.", "Turn it off.", "Thanks to the rain, we stayed in.", "It actually works.",
+            "Let's go.", "Its tail wagged.", "Email ana@outlook.com about it.")) assertEquals(s, s, f(s))
+        val once = f("Yeah, honestly, I'm gonna say it's done! Dunno, imma check.")
+        assertEquals(once, f(once))
+    }
 }

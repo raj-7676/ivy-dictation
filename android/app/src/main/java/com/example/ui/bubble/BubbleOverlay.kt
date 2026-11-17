@@ -119,13 +119,15 @@ fun BubbleOverlay(
         ) {
             // Tone slider: Original | Grammar | Formal (shown after a dictation)
             AnimatedVisibility(
-                visible = state.toneVisible,
+                visible = state.toneVisible && !state.dragging,
                 enter = fadeIn(tween(200, easing = FastOutSlowInEasing)) +
                     androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 380f)) { it / 2 } +
                     androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 380f), initialScale = 0.75f,
                         transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)),
-                exit = fadeOut(tween(160)) + androidx.compose.animation.scaleOut(tween(200, easing = FastOutSlowInEasing), targetScale = 0.85f,
-                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f))
+                // a drag takes it away at once (the window shrinks to the bubble straight away)
+                exit = if (state.dragging) androidx.compose.animation.ExitTransition.None
+                    else fadeOut(tween(160)) + androidx.compose.animation.scaleOut(tween(200, easing = FastOutSlowInEasing), targetScale = 0.85f,
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f))
             ) {
                 Box(Modifier.padding(bottom = 8.dp)) { ToneSlider(state) }
             }

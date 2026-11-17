@@ -13,11 +13,13 @@ android {
     applicationId = "com.glowco.ivy"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.0.4"
+    versionCode = 6
+    versionName = "1.0.5"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    ndk { abiFilters += listOf("arm64-v8a") }  // libivy.so (native/) is built for 64-bit ARM only
+    // libivy.so (native/) is built for 64-bit ARM; `-Pabi32` builds the experimental 32-bit APK instead
+    // (phones like Galaxy M13 that run 32-bit Android; libs from native/build_android_v7.bat)
+    ndk { abiFilters += listOf(if (project.hasProperty("abi32")) "armeabi-v7a" else "arm64-v8a") }
   }
   androidResources { noCompress += listOf("wav") }
   // llama.cpp finds its CPU code (libggml-cpu-*.so) by listing nativeLibraryDir, so the .so files must be extracted

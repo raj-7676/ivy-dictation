@@ -2,6 +2,17 @@
 
 All notable changes to Ivy. Downloads are on the [Releases page](https://github.com/raj-7676/ivy-dictation/releases).
 
+## Android 1.0.5 (2026-11-17)
+
+- **The X no longer stays on screen.** After dropping the bubble on the X, the X circle could stay behind on every screen (home, app drawer). Fixed.
+- **Dragging follows your finger exactly.** The bubble lagged behind a fast finger, so a quick flick at the X often missed. It now tracks your finger's real place on the screen and closes on every flick speed we tried.
+- **Dragging from the screen edge no longer goes Back.** A bubble docked at the edge sat in Android's swipe-back zone: dragging it sideways closed the keyboard. That area now belongs to the bubble.
+- **Drag to the X right after a dictation.** With the Original | Grammar | Formal slider showing, the bubble could not reach the X. The slider now steps aside while you drag and comes back if you let go elsewhere.
+- **Grammar fixes more.** A new rulebook finishes what the small model misses: "they was", "we needs", "I has", "he have", "didn't sent", "the kids was", "said me", "I am agree", "discussed about", "since two years". Words you saved in Dictionary are never touched.
+- **Formal always works.** It now uses the desktop app's Professional rules ("I'm gonna" → "I am going to", "yeah" → "yes", "thanks" → "thank you"). If the rewrite model is missing or fails, these rules still give a formal version instead of "Already good".
+- **Taps on the slider are never lost.** Tapping Formal while Grammar is still writing used to do nothing; it now happens right after.
+- Web addresses like glow.co or google.com no longer get a capital letter after the dot.
+
 ## Android 1.0.4 (2026-11-16)
 
 - **Drag the bubble onto the X to close Ivy for that text box.** While you drag the bubble, an X appears at the bottom middle of the screen. Near it, the bubble is pulled onto the X; let go there and Ivy goes away for that box and frees its memory. It comes back when you tap into another text box, or once the keyboard closes or you leave the app. Same as Wispr Flow.

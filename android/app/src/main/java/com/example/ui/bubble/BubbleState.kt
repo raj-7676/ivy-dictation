@@ -105,6 +105,9 @@ class BubbleState(
     /** Called when the user lets go of a drag (the floating window snaps to the nearest side). */
     var onDragEnd: (() -> Unit)? = null
 
+    /** The bubble is being dragged: the tone slider steps aside (it comes back on drop) so only the bubble moves. */
+    var dragging by mutableStateOf(false)
+
     // Live audio waveform simulation data (normalized 0f..1f heights)
     val waveformAmplitudes = mutableStateListOf<Float>().apply {
         repeat(12) { add(0.2f) }

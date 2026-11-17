@@ -72,7 +72,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     private val scope = MainScope()
     private lateinit var wm: WindowManager
     private lateinit var bubble: BubbleState
-    private var view: ComposeView? = null
+    private var view: View? = null // the bubble window: a FrameLayout host around the ComposeView
     private val params = WindowManager.LayoutParams(
         WindowManager.LayoutParams.WRAP_CONTENT, // real size is set in the state collector (see onServiceConnected)
         WindowManager.LayoutParams.WRAP_CONTENT,
@@ -104,6 +104,9 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     private fun winPx() = WIN_H * resources.displayMetrics.density
     private fun applyTopY(yTop: Int) { params.y = (resources.displayMetrics.heightPixels - yTop - winPx()).toInt() }
     private fun topY() = (resources.displayMetrics.heightPixels - params.y - winPx()).toInt()
+    // The bubble's centre from the docked edge of its window (6 dp side padding). Not the window's centre: the window
+    // is still wide for a moment after the tone slider steps aside for a drag.
+    private fun bubbleC() = (6f + bubble.bubbleSize.diameterDp.value / 2f) * resources.displayMetrics.density
 
     private val engine = object : BubbleEngine {
         override fun start(): Boolean {
@@ -202,8 +205,13 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         dock(if (prefs.getBoolean("bubble_left", false)) BubbleDockSide.LEFT else BubbleDockSide.RIGHT)
         // Let go: snap to the nearer side (never left floating mid-screen), like Wispr Flow's bubble.
         bubble.onDragEnd = onDragEnd@{
+            // The drag handler below runs a moment after each move. A move still waiting when the finger lifts would
+            // run after this and show the X again (and leave `dragging` on) for good: drop it here.
+            // A quick flick lifts before the last moves were handled: judge the drop from where the finger let go.
+            if (bubble.dragging || bubble.dragOffset != Offset.Zero) dragStep()
+            bubble.dragOffset = Offset.Zero
             val wasHot = xHot
-            xShown = false; xHot = false; dragging = false
+            xShown = false; xHot = false; bubble.dragging = false
             snapJob?.cancel(); snapJob = null
             xView?.let { xv -> scope.launch { delay(200); if (!xShown) xv.visibility = View.GONE } }
             if (wasHot && bubble.mode == BubbleMode.IDLE) { closeForThisBox(); return@onDragEnd }
@@ -211,9 +219,9 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
             val h = resources.displayMetrics.heightPixels
             applyTopY(topY().coerceIn(h / 10, h * 8 / 10))
             val w = resources.displayMetrics.widthPixels
-            val vw = view?.width ?: 0
-            val fromLeft = if (bubble.dockSide == BubbleDockSide.LEFT) params.x else w - params.x - vw
-            dock(if (fromLeft + vw / 2 < w / 2) BubbleDockSide.LEFT else BubbleDockSide.RIGHT)
+            // which half the bubble itself is in (the window may still be wide from the tone slider)
+            val bubbleX = if (bubble.dockSide == BubbleDockSide.LEFT) params.x + bubbleC() else w - params.x - bubbleC()
+            dock(if (bubbleX < w / 2f) BubbleDockSide.LEFT else BubbleDockSide.RIGHT)
             prefs.edit().putBoolean("bubble_left", bubble.dockSide == BubbleDockSide.LEFT).putInt("bubble_y", topY()).apply()
         }
         val v = ComposeView(this).apply {
@@ -232,7 +240,26 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                     ) { BubbleOverlay(state = bubble, onTextEmitted = ::type, fillWidth = false) }
                 }
             }
-            visibility = View.GONE
+        }
+        // The window moves under the finger while it is dragged, so the finger's place INSIDE the window lags (each
+        // window move cancels part of the next finger move: a quick flick never reached the X, S26 2026-11-17).
+        // The host notes where the finger is on the SCREEN, and the drag follows that.
+        val host = object : android.widget.FrameLayout(this) {
+            override fun dispatchTouchEvent(e: android.view.MotionEvent): Boolean {
+                touchX = e.rawX; touchY = e.rawY
+                if (e.actionMasked == android.view.MotionEvent.ACTION_DOWN) { downX = e.rawX; downY = e.rawY; downParamsX = params.x; downParamsY = params.y }
+                return super.dispatchTouchEvent(e)
+            }
+        }.apply {
+            // Compose looks for these on the window's root view, which is now the host
+            setViewTreeLifecycleOwner(this@IvyAccessibilityService)
+            setViewTreeSavedStateRegistryOwner(this@IvyAccessibilityService)
+            addView(v); visibility = View.GONE
+            // Docked at the screen edge, the bubble sits in Android's edge-swipe "Back" zone: dragging it sideways
+            // went Back and closed the keyboard (S26 2026-11-17). Its own area is taken out of that gesture.
+            if (Build.VERSION.SDK_INT >= 29) addOnLayoutChangeListener { lv, _, _, _, _, _, _, _, _ ->
+                lv.systemGestureExclusionRects = listOf(android.graphics.Rect(0, 0, lv.width, lv.height))
+            }
         }
         // Android animates a window's position when its frame changes (the bubble used to slide in from the side every
         // time the window shrank). PRIVATE_FLAG_NO_MOVE_ANIMATION switches that off; hidden field, so best effort.
@@ -265,67 +292,18 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
             y = ((X_BOTTOM - (X_BOX - X_SIZE) / 2) * dm0.density).toInt()
             windowAnimations = 0
         })
-        wm.addView(v, params)
-        view = v
+        wm.addView(host, params)
+        view = host
         applySettings()
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         // Dragging moves the window anywhere; letting go snaps it to a side (onDragEnd above).
         scope.launch {
-            snapshotFlow { bubble.dragOffset }.collect { o ->
-                if (o == Offset.Zero) return@collect
-                val h = resources.displayMetrics.heightPixels
-                val w = resources.displayMetrics.widthPixels
-                // x counts from the docked edge, so on the right side moving left makes it bigger
-                val dx = if (bubble.dockSide == BubbleDockSide.LEFT) o.x.toInt() else -o.x.toInt()
-                val vw = view?.width ?: params.width
-                // The finger's place (free*) is tracked apart from the window: while the X pulls the bubble in, the
-                // window sits on the X, and pulling out puts it back under the finger.
-                if (!dragging) { dragging = true; freeX = params.x; freeY = params.y }
-                freeX = (freeX + dx).coerceIn(0, w - vw)
-                // down to the screen bottom while dragging (to reach the X); onDragEnd puts it back in its band
-                freeY = (freeY - o.y.toInt()).coerceIn(0, (h - h / 10 - winPx()).toInt())
-                bubble.dragOffset = Offset.Zero
-                var hot = false
-                if (bubble.mode == BubbleMode.IDLE) {
-                    if (!xShown) { xView?.visibility = View.VISIBLE; xShown = true }
-                    // both centres measured from the bottom and the left of the screen (the windows hang from the bottom)
-                    val d = resources.displayMetrics.density
-                    val bx = if (bubble.dockSide == BubbleDockSide.LEFT) freeX + vw / 2f else w - freeX - vw / 2f
-                    val by = freeY + bubble.bubbleSize.diameterDp.value * d / 2f
-                    // a wider ring to leave than to enter, so the bubble doesn't flick in and out at the edge
-                    val reach = (if (xHot) X_HOT * 1.4f else X_HOT.toFloat()) * d
-                    hot = Math.hypot((bx - w / 2f).toDouble(), (by - (X_BOTTOM + X_SIZE / 2f) * d).toDouble()) < reach
-                    if (hot && !xHot) xView?.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
-                }
-                if (hot) {
-                    if (!xHot) { // pulled in: glide onto the X centre
-                        val d = resources.displayMetrics.density
-                        val tx = (w - vw) / 2
-                        val ty = ((X_BOTTOM + X_SIZE / 2f - bubble.bubbleSize.diameterDp.value / 2f) * d).toInt()
-                        snapJob?.cancel()
-                        snapJob = scope.launch {
-                            val sx = params.x; val sy = params.y
-                            for (i in 1..SNAP_FRAMES) {
-                                val t = i.toFloat() / SNAP_FRAMES
-                                val e = 1f - (1f - t) * (1f - t) // ease out
-                                params.x = (sx + (tx - sx) * e).toInt(); params.y = (sy + (ty - sy) * e).toInt()
-                                view?.let { wm.updateViewLayout(it, params) }
-                                delay(16)
-                            }
-                        }
-                    }
-                } else {
-                    snapJob?.cancel(); snapJob = null
-                    params.x = freeX; params.y = freeY
-                    view?.let { wm.updateViewLayout(it, params) }
-                }
-                xHot = hot
-            }
+            snapshotFlow { bubble.dragOffset }.collect { o -> if (o != Offset.Zero) dragStep() }
         }
         // Stay visible while busy even if the text box lost focus; hide again once idle. The wide window shrinks
         // back only after the pill's closing fade has finished.
         scope.launch {
-            snapshotFlow { Triple(bubble.mode, bubble.chip, bubble.menuOpen) to (bubble.chip2 != null) to bubble.toneVisible }.collectLatest { (st2, tone) ->
+            snapshotFlow { Triple(bubble.mode, bubble.chip, bubble.menuOpen) to (bubble.chip2 != null) to (bubble.toneVisible && !bubble.dragging) }.collectLatest { (st2, tone) ->
                 val (st, c2) = st2
                 val (m, c, menu) = st
                 // Phone must not time out while listening
@@ -344,7 +322,9 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
                 }
                 val tw = (wDp * dm.density).toInt(); val th = (hDp * dm.density).toInt()
                 val grow = tw >= params.width && th >= params.height
-                if (!grow) delay(450) // let the closing animation finish before the window gets smaller
+                // let the closing animation finish before the window gets smaller; not while dragging: the slider goes
+                // at once then, and a wide window would keep the bubble from reaching the X
+                if (!grow && !bubble.dragging) delay(450)
                 if (params.width != tw || params.height != th) {
                     params.width = tw; params.height = th
                     view?.let { wm.updateViewLayout(it, params) }
@@ -480,10 +460,71 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
     private var closedHere = false
     private var closedBox: AccessibilityNodeInfo? = null // null when the app shows no box node (Samsung Notes, web pages)
     private var reopenJob: kotlinx.coroutines.Job? = null
-    private var dragging = false
     private var freeX = 0
     private var freeY = 0
+    // where the finger is on the screen, and where it and the window were when it went down (see the host view)
+    private var touchX = 0f
+    private var touchY = 0f
+    private var downX = 0f
+    private var downY = 0f
+    private var downParamsX = 0
+    private var downParamsY = 0
     private var snapJob: kotlinx.coroutines.Job? = null
+
+    /** One drag step: the bubble goes where the finger is on the screen; near the X it is pulled onto it. */
+    private fun dragStep() {
+        val h = resources.displayMetrics.heightPixels
+        val w = resources.displayMetrics.widthPixels
+        // x counts from the docked edge, so on the right side moving left makes it bigger
+        val dx = (touchX - downX).let { if (bubble.dockSide == BubbleDockSide.LEFT) it else -it }
+        val vw = view?.width ?: params.width
+        // The finger's place (free*) is tracked apart from the window: while the X pulls the bubble in, the
+        // window sits on the X, and pulling out puts it back under the finger.
+        if (!bubble.dragging) { bubble.dragging = true; bubble.menuOpen = false }
+        val wantX = (downParamsX + dx).toInt()
+        freeX = wantX.coerceIn(0, w - vw)
+        // down to the screen bottom while dragging (to reach the X); onDragEnd puts it back in its band
+        freeY = (downParamsY - (touchY - downY)).toInt().coerceIn(0, (h - h / 10 - winPx()).toInt())
+        bubble.dragOffset = Offset.Zero
+        var hot = false
+        val bubbleC = bubbleC()
+        if (bubble.mode == BubbleMode.IDLE) {
+            if (!xShown) { xView?.visibility = View.VISIBLE; xShown = true }
+            // both centres measured from the bottom and the left of the screen (the windows hang from the bottom)
+            val d = resources.displayMetrics.density
+            // from the finger, not the window: a window still wide from the tone slider can't reach the middle yet
+            val fx = wantX.coerceIn(0, (w - 2 * bubbleC).toInt())
+            val bx = if (bubble.dockSide == BubbleDockSide.LEFT) fx + bubbleC else w - fx - bubbleC
+            val by = freeY + bubble.bubbleSize.diameterDp.value * d / 2f
+            // a wider ring to leave than to enter, so the bubble doesn't flick in and out at the edge
+            val reach = (if (xHot) X_HOT * 1.4f else X_HOT.toFloat()) * d
+            hot = Math.hypot((bx - w / 2f).toDouble(), (by - (X_BOTTOM + X_SIZE / 2f) * d).toDouble()) < reach
+            if (hot && !xHot) xView?.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+        }
+        if (hot) {
+            if (!xHot) { // pulled in: glide onto the X centre
+                val d = resources.displayMetrics.density
+                val tx = (w / 2f - bubbleC).toInt()
+                val ty = ((X_BOTTOM + X_SIZE / 2f - bubble.bubbleSize.diameterDp.value / 2f) * d).toInt()
+                snapJob?.cancel()
+                snapJob = scope.launch {
+                    val sx = params.x; val sy = params.y
+                    for (i in 1..SNAP_FRAMES) {
+                        val t = i.toFloat() / SNAP_FRAMES
+                        val e = 1f - (1f - t) * (1f - t) // ease out
+                        params.x = (sx + (tx - sx) * e).toInt(); params.y = (sy + (ty - sy) * e).toInt()
+                        view?.let { wm.updateViewLayout(it, params) }
+                        delay(16)
+                    }
+                }
+            }
+        } else {
+            snapJob?.cancel(); snapJob = null
+            params.x = freeX; params.y = freeY
+            view?.let { wm.updateViewLayout(it, params) }
+        }
+        xHot = hot
+    }
 
     private fun closeForThisBox() {
         closedHere = true
@@ -555,6 +596,8 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         } else if (v.visibility == View.VISIBLE && hideJob == null) {
             hideJob = scope.launch {
                 delay(350); hideJob = null; view?.visibility = View.GONE
+                // a hidden window may never get the finger's lift: end a drag here so the X can't stay on screen
+                if (bubble.dragging) bubble.onDragEnd?.invoke()
                 warmJob?.cancel(); warmJob = null
                 heldJob?.cancel(); heldJob = null
                 if (engineHeld) { engineHeld = false; Engine.release() }
@@ -698,6 +741,7 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
 
     private fun offerTone(original: String) {
         tones.fill(null); tones[0] = original
+        pendingTone = null
         lastToneAt = System.currentTimeMillis()
         // 60 s window in which the tap menu offers "Polish last" (same idea as Wispr Flow's "last dictation, 60 seconds")
         bubble.polishReady = true
@@ -740,47 +784,58 @@ class IvyAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSta
         return TextClean.unmask(TextClean.grammar(m), mk)
     }
 
-    private fun formalText(original: String): String? {
+    /** Formal stop: the model's rewrite, then the desktop's Professional rules. When the model is missing, fails, or
+     *  drops a saved word, the rules alone on the grammar-fixed text (it used to say "Already good" and snap back). */
+    private fun formalText(original: String): String {
         val mk = TextClean.mask(original, protectedTerms())
-        val m = runCatching { Engine.rewrite(this, mk.text) }.getOrNull()?.trim()?.takeIf { it.isNotBlank() } ?: return null
-        if (!TextClean.keptAll(m, mk)) return null // the model dropped or changed a saved word: do not trust it
-        return TextClean.unmask(m, mk)
+        val m = runCatching { Engine.rewrite(this, mk.text) }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }
+        if (m != null && TextClean.keptAll(m, mk)) return TextClean.unmask(TextClean.tidy(TextClean.formal(m)), mk)
+        Log.i(TAG, "formal: model ${if (m == null) "gave nothing" else "dropped a saved word"}, rules only")
+        val base = tones[1] ?: TextClean.unmask(TextClean.grammar(mk.text), mk)
+        val mk2 = TextClean.mask(base, protectedTerms())
+        return TextClean.unmask(TextClean.tidy(TextClean.formal(mk2.text)), mk2)
     }
+
+    private var pendingTone: Int? = null
 
     /** Moves the knob to [target] and swaps the sentence in the text box for that version. */
     private fun moveTone(target: Int) {
-        if (bubble.toneBusy || target == bubble.toneLevel) return
+        // a tap while the last move is still writing is kept and done right after it (it used to be dropped)
+        if (bubble.toneBusy) { pendingTone = target; return }
+        if (target == bubble.toneLevel) return
         Log.i(TAG, "tone move ${bubble.toneLevel} -> $target")
         val from = bubble.toneLevel
         bubble.toneBusy = true
         bubble.toneLevel = target // the knob glides at once; the text follows
         scope.launch {
-            val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                tones[target] ?: when (target) {
-                    1 -> grammarText(tones[0]!!)
-                    else -> formalText(tones[0]!!)
-                }.also { tones[target] = it }
+            try {
+                val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    tones[target] ?: when (target) {
+                        1 -> grammarText(tones[0]!!)
+                        else -> formalText(tones[0]!!)
+                    }.also { tones[target] = it }
+                }
+                Log.i(TAG, "tone text for $target: ${text.length} chars")
+                if (text == tones[0] && from == 0) { // nothing to change (grammar, or formal of an already formal text)
+                    bubble.toneLevel = 0; bubble.toneBusy = false
+                    bubble.triggerFallbackState(BubbleMode.FALLBACK_NOTHING_TO_FIX); return@launch
+                }
+                val now = tones[from] ?: tones[0]!!
+                ownEditAt = System.currentTimeMillis()
+                val ok = if (text == now) true else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { swap(now, text) }
+                ownEditAt = System.currentTimeMillis()
+                Log.i(TAG, "tone swap ok=$ok")
+                bubble.toneBusy = false
+                if (!ok) {
+                    bubble.toneLevel = from; bubble.toneVisible = false
+                    copy(text); bubble.triggerFallbackState(BubbleMode.FALLBACK_COPIED); return@launch
+                }
+                if (text == tones[0] && target != 0) tones[target] = text
+            } finally {
+                bubble.toneBusy = false
+                val next = pendingTone; pendingTone = null
+                if (next != null && next != bubble.toneLevel && bubble.toneVisible) moveTone(next)
             }
-            if (text == null) { // the model gave nothing: go back
-                bubble.toneLevel = from; bubble.toneBusy = false
-                bubble.triggerFallbackState(BubbleMode.FALLBACK_NOTHING_TO_FIX); return@launch
-            }
-            Log.i(TAG, "tone text for $target: ${if (text == null) "none" else "${text.length} chars"}")
-            if (target == 1 && text == tones[0] && from == 0) { // grammar found nothing to change
-                bubble.toneLevel = 0; bubble.toneBusy = false
-                bubble.triggerFallbackState(BubbleMode.FALLBACK_NOTHING_TO_FIX); return@launch
-            }
-            val now = tones[from] ?: tones[0]!!
-            ownEditAt = System.currentTimeMillis()
-            val ok = if (text == now) true else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { swap(now, text) }
-            ownEditAt = System.currentTimeMillis()
-            Log.i(TAG, "tone swap ok=$ok")
-            bubble.toneBusy = false
-            if (!ok) {
-                bubble.toneLevel = from; bubble.toneVisible = false
-                copy(text); bubble.triggerFallbackState(BubbleMode.FALLBACK_COPIED); return@launch
-            }
-            if (text == tones[0] && target != 0) tones[target] = text
         }
     }
 
